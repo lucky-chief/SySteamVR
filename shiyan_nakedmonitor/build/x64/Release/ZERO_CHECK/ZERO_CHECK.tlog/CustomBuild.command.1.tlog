@@ -1,0 +1,10 @@
+^U:\PROJECTS\C++\STEAMVR\SHIYAN_NAKEDMONITOR\BUILD\CMAKEFILES\C9CABBB3B400DDE2A94B02D183D6D532\GENERATE.STAMP.RULE
+setlocal
+U:\Apps\CMake\bin\cmake.exe -SU:/Projects/C++/SteamVR/shiyan_nakedmonitor -BU:/Projects/C++/SteamVR/shiyan_nakedmonitor/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file U:/Projects/C++/SteamVR/shiyan_nakedmonitor/build/shiyan_nakedmonitor.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

@@ -1,0 +1,10 @@
+{
+	"alwaysActivate": true,
+	"name": "shiyan_nakedmonitor",
+	"directory": "",
+	"resourceOnly": false,
+	"redirectsDisplay": false,
+	"hmd_presence": [
+		"*.*"
+	]
+}

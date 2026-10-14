@@ -1,0 +1,158 @@
+# Shiyan Naked Monitor — OpenVR driver
+
+Virtual OpenVR/SteamVR driver that exposes the naked-eye 3D (autostereoscopic)
+side-by-side panel as a SteamVR headset.
+
+## How it works
+
+```
+Game -> SteamVR compositor -> this driver (registered as an HMD)
+     -> full-screen SBS desktop window -> naked-eye 3D panel -> stereo image
+```
+
+* The HMD is registered with `TrackedDeviceClass_HMD` and exposes a single
+  `IVRDisplayComponent` in **extended-desktop mode**. The compositor renders the
+  left eye into the left half and the right eye into the right half of the
+  window, which is a plain side-by-side image.
+* Distortion is **identity** (the panel has no lens).
+* The pose is **static** ("cinema mode"): there is no tracking yet.
+
+## Naming
+
+Valve's docs want the driver name lowercase and identical for the folder, the
+manifest `name`, and the DLL (`driver_<name>.dll`). The product name
+`Shiyan_NakedMonitor` was therefore normalised to **`shiyan_nakedmonitor`**
+internally; the friendly name shown in SteamVR is the `model_number`
+("Shiyan Naked Monitor"). If you prefer the exact original casing, rename the
+folder, the manifest `name`, the CMake `OUTPUT_NAME`, and re-run `vrpathreg`.
+
+## Layout
+
+```
+shiyan_nakedmonitor/                 <- register THIS folder with vrpathreg
+├── driver.vrdrivermanifest
+├── CMakeLists.txt
+├── src/                             <- source (not needed at runtime)
+├── resources/
+│   ├── settings/default.vrsettings  <- all tunables
+│   └── localization/localization.json
+└── bin/win64/driver_shiyan_nakedmonitor.dll   <- build output
+```
+
+## Build
+
+```powershell
+cmake -A x64 -B build
+cmake --build build --config Release
+```
+
+The DLL is written to `bin/win64/driver_shiyan_nakedmonitor.dll`.
+(If the SDK is not at `../openvr-master`, pass `-DOPENVR_ROOT=<path>`.)
+
+## Install / register
+
+```powershell
+# Run from the SteamVR bin folder (contains vrpathreg.exe)
+vrpathreg.exe adddriver "<absolute path>\shiyan_nakedmonitor"
+```
+
+Then start SteamVR. The window is placed automatically on the monitor whose
+resolution equals `window_width x window_height`; otherwise it uses
+`window_x/window_y`.
+
+## Configuration
+
+All parameters live in `resources/settings/default.vrsettings`. To change them
+without touching the shipped defaults, put the same keys in `steamvr.vrsettings`
+under the same sections.
+
+| Key | Meaning |
+|---|---|
+| `window_width` / `window_height` | Full SBS panel resolution (7680x2160) |
+| `render_width` / `render_height` | Per-eye render target (3840x2160) |
+| `auto_place_window` | Auto-find the panel monitor by resolution |
+| `window_x` / `window_y` | Manual placement when auto is off |
+| `display_frequency` | Panel refresh, **must be > 0** |
+| `ipd_meters` | Panel's *designed* stereo baseline (0.065), not the wearer's IPD |
+| `eye_depth_meters` | Viewer-to-panel distance (0.5) |
+| `vsync_to_photons` | Compositor-to-photon latency estimate |
+| `seated_height_meters` | Fixed eye height for the static pose |
+| `fov_horizontal_deg` | Per-eye horizontal FOV (total angle) |
+| `fov_vertical_deg` | Per-eye vertical FOV; `0` = derive from horizontal + aspect |
+| `swap_eyes` | Set true if left/right come out mirrored |
+| `is_on_desktop_property` | Keep **false**. `true` triggers the SteamVR error -202 prompt |
+| `display_debug_mode` | `true` = compositor uses a window (default). `false` = exclusive fullscreen |
+
+### About the vertical FOV
+
+`fov_vertical_deg` defaults to `0` (auto). With a 16:9 per-eye sub-image and a
+60 deg horizontal FOV, the geometrically consistent vertical FOV is about
+**36 deg**, not 60 deg. A mismatched vertical FOV stretches the world
+vertically. Set an explicit value only if your panel truly is 60x60.
+
+## Tuning checklist
+
+1. Confirm the window lands on the SBS panel (`swap_eyes` if mirrored).
+2. Verify depth: adjust `ipd_meters` toward the panel's real design baseline.
+3. Verify FOV: match the panel's specified horizontal FOV.
+4. If a game refuses to start, check that `display_frequency` > 0.
+
+## Troubleshooting
+
+### HMD stuck at "locating" / SteamVR keeps demanding Room Setup
+
+A driver that supplies its own tracking **must** declare a tracking universe and
+**should** provide its own chaperone (play area). Without them SteamVR cannot
+relate the driver's raw tracking space to the seated/standing origins, so it
+reports the HMD as "locating" and repeatedly asks for Room Setup — which can
+never complete, because a fixed-viewpoint panel never moves.
+
+The driver handles this by:
+* setting `Prop_CurrentUniverseId_Uint64` (`universe_id`, default 2), and
+* setting `Prop_DriverProvidedChaperoneJson_String` (`provide_chaperone`, default
+  true) with a minimal chaperone whose floor is at raw `y = 0`.
+
+Tunables: `universe_id` (never 0 or 1), `provide_chaperone`, `play_area_meters`.
+
+### HMD keeps entering standby ("move the headset to wake")
+
+SteamVR treats an HMD as "active" only when it moves, when a boolean input
+changes, or when an app launches — and the HMD standby timeout defaults to 5
+seconds. A fixed-viewpoint panel never moves, so it sleeps.
+
+The driver avoids this by exposing an always-on `/proximity` boolean input
+(`Prop_ContainsProximitySensor_Bool = true`). Per Valve's "Device sleep states"
+documentation, **a device never goes to sleep while `/proximity` is true**, so
+the panel stays awake indefinitely. No configuration needed.
+
+If you ever want it to sleep normally, set `Prop_ContainsProximitySensor_Bool`
+back to false (or stop updating the component).
+
+### SteamVR error -202 ("Make sure your headset's display is in fullscreen mode")
+
+`-202` is `VRInitError_Driver_HmdUnknown`, but SteamVR surfaces it as "the
+compositor could not create its fullscreen window". It is NOT about the app's
+window mode. Fixes, in order:
+
+1. `is_on_desktop_property` must be **false** (Valve's sample does this; setting
+   it true makes vrmonitor raise the warning).
+2. `display_debug_mode` must be **true** so the compositor uses a borderless
+   window instead of requesting exclusive fullscreen.
+3. The window position/size must match a real monitor. Check the driver log line
+   `shiyan_nakedmonitor: auto-placed window on monitor at (x, y)`. If it says
+   "no monitor matched", either the panel is not a single 7680x2160 monitor on
+   the Windows desktop, or DPI scaling changed the reported coordinates — set
+   `auto_place_window=false` and enter `window_x`/`window_y` manually.
+4. `display_frequency` must match the panel's actual refresh (e.g. 60).
+
+Valve's own notes confirm that the `IVRDisplayComponent` "extended desktop" path
+is buggy on current SteamVR (openvr issue #1727 has a maintainer saying no
+commercial headset uses it). If the window keeps landing on the primary display
+or stays red, the reliable fix is to switch the driver to
+`IVRDriverDirectModeComponent` or `IVRVirtualDisplay`, where the driver owns the
+window/texture instead of relying on the compositor's window placement.
+
+## Not yet implemented
+
+* Head/eye tracking (currently a fixed viewpoint).
+* Motion controllers (only gamepad/keyboard-friendly seated games work for now).

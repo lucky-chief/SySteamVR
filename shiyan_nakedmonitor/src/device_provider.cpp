@@ -1,0 +1,60 @@
+//============ Shiyan Naked Monitor OpenVR driver ============
+#include "device_provider.h"
+
+#include "driverlog.h"
+
+vr::EVRInitError NakedDeviceProvider::Init( vr::IVRDriverContext *pDriverContext )
+{
+	// Initialise the server driver context so we can call into the runtime.
+	VR_INIT_SERVER_DRIVER_CONTEXT( pDriverContext );
+
+	hmd_device_ = std::make_unique< NakedHMDDeviceDriver >();
+
+	if ( !vr::VRServerDriverHost()->TrackedDeviceAdded(
+			hmd_device_->GetSerialNumber().c_str(), vr::TrackedDeviceClass_HMD, hmd_device_.get() ) )
+	{
+		DriverLog( "shiyan_nakedmonitor: failed to add HMD device." );
+		return vr::VRInitError_Driver_Unknown;
+	}
+
+	DriverLog( "shiyan_nakedmonitor: HMD device added." );
+	return vr::VRInitError_None;
+}
+
+const char *const *NakedDeviceProvider::GetInterfaceVersions()
+{
+	return vr::k_InterfaceVersions;
+}
+
+bool NakedDeviceProvider::ShouldBlockStandbyMode()
+{
+	return false;
+}
+
+void NakedDeviceProvider::RunFrame()
+{
+	if ( hmd_device_ != nullptr )
+	{
+		// Publish our (static) pose. Cheap, and keeps the device in the "ready" state.
+		hmd_device_->UpdatePose();
+	}
+
+	// Drain the event queue so it does not back up.
+	vr::VREvent_t event = {};
+	while ( vr::VRServerDriverHost()->PollNextEvent( &event, sizeof( vr::VREvent_t ) ) )
+	{
+	}
+}
+
+void NakedDeviceProvider::EnterStandby()
+{
+}
+
+void NakedDeviceProvider::LeaveStandby()
+{
+}
+
+void NakedDeviceProvider::Cleanup()
+{
+	hmd_device_ = nullptr;
+}
