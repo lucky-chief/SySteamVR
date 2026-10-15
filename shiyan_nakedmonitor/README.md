@@ -82,6 +82,9 @@ under the same sections.
 | `swap_eyes` | Set true if left/right come out mirrored |
 | `is_on_desktop_property` | Keep **false**. `true` triggers the SteamVR error -202 prompt |
 | `display_debug_mode` | `true` = compositor uses a window (default). `false` = exclusive fullscreen |
+| `display_mode` | `extended` (default) = compositor-owned desktop window; `direct` = the driver owns the output window + D3D11 swap chain |
+| `direct_texture_share` | `shared` (default) = legacy shared handle; `nthandle` = NT handle + keyed mutex. Only used when `display_mode = direct` |
+| `direct_vsync` | `true` (default) = `Present` blocks on vblank, pacing the compositor to the refresh. Only used when `display_mode = direct` |
 
 ### About the vertical FOV
 
@@ -151,6 +154,51 @@ commercial headset uses it). If the window keeps landing on the primary display
 or stays red, the reliable fix is to switch the driver to
 `IVRDriverDirectModeComponent` or `IVRVirtualDisplay`, where the driver owns the
 window/texture instead of relying on the compositor's window placement.
+
+## Direct mode (experimental)
+
+`display_mode = "direct"` switches the HMD from `IVRDisplayComponent`
+(extended desktop, compositor-owned window) to `IVRDriverDirectModeComponent`:
+the driver creates its own borderless window on the panel, a D3D11 device and a
+swap chain, and presents the frame itself. The compositor no longer creates its
+"Headset Window", so the whole class of `-202` / window-placement problems
+(e.g. the window parked at `(32767, 32767)`) disappears.
+
+This is a **skeleton**, built in two stages:
+
+1. **Stage 1 (done):** window + D3D11 device + swap chain + `Present` path.
+2. **Stage 2 (done):** `SubmitLayer` resolves the compositor's per-eye textures
+   (the same shared textures this driver created) and `Present` draws them side
+   by side into the backbuffer - left eye into the left half, right eye into the
+   right half - so the window shows the real SBS image. `swap_eyes` flips the
+   halves. A tiny full-screen-quad shader (compiled at runtime via
+   `d3dcompiler`) samples each eye texture; the texture bounds from
+   `SubmitLayer` are honoured.
+
+Limitations of the current skeleton:
+
+* `CreateSwapTextureSet` allocates the shared textures the compositor renders
+  into. The sharing flavour is configurable via `direct_texture_share`:
+  - `shared` (default): legacy handle - `D3D11_RESOURCE_MISC_SHARED` +
+    `IDXGIResource::GetSharedHandle`, `unTextureFlags = 0`.
+  - `nthandle`: NT handle - `D3D11_RESOURCE_MISC_SHARED_NTHANDLE |
+    D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX` + `CreateSharedHandle`,
+    `VRSwapTextureFlag_Shared_NTHandle`. (The `KEYEDMUTEX` flag is mandatory:
+    without it the runtime strictly validates and rejects the texture with
+    `E_INVALIDARG`.)
+  If the preferred mode cannot be created at all, it falls back to the other
+  once and remembers which one worked.
+* `Present` implements the documented sync-texture handshake: the compositor's
+  sync texture is opened once via `OpenSharedResource`, its keyed mutex acquired
+  (`AcquireSync(0, 10)`) to signal "frame taken", then released again before the
+  vsync-blocking `Present`. (The swap textures have no keyed mutex in `shared`
+  mode, so tearing is still possible.)
+* Frame pacing is done by the swap chain's vsync (`direct_vsync`, default on).
+  With vsync off the compositor free-runs and pegs the GPU.
+* `DestroyAllSwapTextureSets` drops every set (the pid is not tracked).
+* If `Present` fails with a device-removed/reset error, the output is torn down
+  and rebuilt on the next call (the compositor's swap textures are *not*
+  recreated - a known gap).
 
 ## Not yet implemented
 

@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 
+#include "direct_mode.h"
 #include "openvr_driver.h"
 
 //-----------------------------------------------------------------------------
@@ -31,6 +32,12 @@ struct NakedDisplayConfig
 
 	bool auto_place_window = true;
 	bool swap_eyes = false;
+
+	// "direct": the driver owns the output window / D3D11 swap chain
+	// (IVRDriverDirectModeComponent) instead of the compositor's extended-desktop
+	// "Headset Window". IsDisplayOnDesktop() then reports false and
+	// NakedDirectModeComponent takes over presenting.
+	bool direct_mode = false;
 
 	// Match the panel by its EDID monitor name (case-insensitive substring)
 	// instead of by resolution. The 3D panel changes resolution between 2D
@@ -76,6 +83,10 @@ public:
 	// while the vrmonitor mirror keeps rendering normally, so the view silently
 	// never reaches the panel. Called from the provider's RunFrame().
 	void EnforceWindowPlacement();
+
+	// Resolved output rectangle (after auto-placement). Used to place the
+	// direct-mode output window on the same panel.
+	void GetResolvedWindowBounds( int32_t *pnX, int32_t *pnY, int32_t *pnWidth, int32_t *pnHeight ) const;
 
 private:
 	NakedDisplayConfig config_;
@@ -126,6 +137,11 @@ public:
 
 private:
 	std::unique_ptr<NakedDisplayComponent> display_component_;
+
+	// Present when display_mode == "direct": the driver (not the compositor)
+	// owns the output window and swap chain.
+	bool use_direct_mode_ = false;
+	std::unique_ptr<NakedDirectModeComponent> direct_mode_component_;
 
 	std::string serial_number_;
 	std::string model_number_;

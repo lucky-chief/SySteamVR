@@ -388,8 +388,9 @@ NakedDisplayComponent::NakedDisplayComponent( const NakedDisplayConfig &config )
 bool NakedDisplayComponent::IsDisplayOnDesktop()
 {
 	// Extended-desktop mode: the compositor renders into a normal window which
-	// we place on the SBS panel.
-	return true;
+	// we place on the SBS panel. In direct mode the driver owns the output
+	// instead, so the compositor must not create a desktop window at all.
+	return !config_.direct_mode;
 }
 
 bool NakedDisplayComponent::IsDisplayRealDisplay()
@@ -494,6 +495,14 @@ void NakedDisplayComponent::GetWindowBounds( int32_t *pnX, int32_t *pnY, uint32_
 	}
 }
 
+void NakedDisplayComponent::GetResolvedWindowBounds( int32_t *pnX, int32_t *pnY, int32_t *pnWidth, int32_t *pnHeight ) const
+{
+	*pnX = resolved_window_x_;
+	*pnY = resolved_window_y_;
+	*pnWidth = resolved_window_width_;
+	*pnHeight = resolved_window_height_;
+}
+
 bool NakedDisplayComponent::ComputeInverseDistortion( vr::HmdVector2_t *pResult, vr::EVREye eEye, uint32_t unChannel, float fU, float fV )
 {
 	// Let SteamVR infer an estimate from ComputeDistortion (which is identity here).
@@ -560,6 +569,12 @@ void NakedDisplayComponent::EnforceWindowPlacement()
 {
 #ifdef _WIN32
 	if ( !config_.auto_place_window )
+	{
+		return;
+	}
+
+	// Direct mode owns its own window; there is no compositor window to babysit.
+	if ( config_.direct_mode )
 	{
 		return;
 	}
@@ -631,6 +646,13 @@ NakedHMDDeviceDriver::NakedHMDDeviceDriver()
 	display_config.swap_eyes = GetBoolOrDefault( kDisplaySection, "swap_eyes", display_config.swap_eyes );
 	GetStringOrDefault( kDisplaySection, "monitor_name_substring", "", display_config.monitor_name_substring );
 
+	// "extended" (default): compositor-owned desktop window (IVRDisplayComponent).
+	// "direct": the driver owns the output window/swap chain (IVRDriverDirectModeComponent).
+	std::string display_mode;
+	GetStringOrDefault( kDisplaySection, "display_mode", "extended", display_mode );
+	display_config.direct_mode = ( display_mode == "direct" );
+	use_direct_mode_ = display_config.direct_mode;
+
 	// --- Off-axis projection geometry --------------------------------------
 	// Panel size seeds the tracker module; the SDK's GetScreenSize overrides it
 	// as a "hardware fact" once the background Register finishes.
@@ -667,6 +689,18 @@ NakedHMDDeviceDriver::NakedHMDDeviceDriver()
 	projection_push_mode_ = GetInt32OrDefault( kDisplaySection, "projection_push_mode", projection_push_mode_ );
 
 	display_component_ = std::make_unique< NakedDisplayComponent >( display_config );
+
+	if ( use_direct_mode_ )
+	{
+		int32_t resolved_x = 0;
+		int32_t resolved_y = 0;
+		int32_t resolved_w = 0;
+		int32_t resolved_h = 0;
+		display_component_->GetResolvedWindowBounds( &resolved_x, &resolved_y, &resolved_w, &resolved_h );
+		direct_mode_component_ = std::make_unique< NakedDirectModeComponent >(
+			resolved_x, resolved_y, resolved_w, resolved_h, display_config.monitor_name_substring );
+		DriverLog( "shiyan_nakedmonitor: display_mode='direct' -> IVRDriverDirectModeComponent enabled." );
+	}
 
 	DriverLog( "shiyan_nakedmonitor: model='%s' serial='%s'.", model_number_.c_str(), serial_number_.c_str() );
 }
@@ -709,7 +743,9 @@ vr::EVRInitError NakedHMDDeviceDriver::Activate( uint32_t unObjectId )
 
 	// true => the compositor uses a normal window instead of exclusive
 	// fullscreen, so it never fails trying to take over a desktop panel.
-	vr::VRProperties()->SetBoolProperty( container, vr::Prop_DisplayDebugMode_Bool, display_debug_mode_ );
+	// In direct mode the compositor owns no window at all, so this must be off.
+	vr::VRProperties()->SetBoolProperty( container, vr::Prop_DisplayDebugMode_Bool,
+		use_direct_mode_ ? false : display_debug_mode_ );
 
 	// --- Keep the HMD awake forever ---------------------------------------
 	// SteamVR considers an HMD "active" only when it moves, when a boolean
@@ -738,6 +774,14 @@ void *NakedHMDDeviceDriver::GetComponent( const char *pchComponentNameAndVersion
 	{
 		return display_component_.get();
 	}
+
+	// Direct mode: the compositor asks for this instead of owning its own window.
+	if ( use_direct_mode_ && direct_mode_component_ != nullptr
+		 && strcmp( pchComponentNameAndVersion, vr::IVRDriverDirectModeComponent_Version ) == 0 )
+	{
+		return direct_mode_component_.get();
+	}
+
 	return nullptr;
 }
 
@@ -809,6 +853,12 @@ void NakedHMDDeviceDriver::UpdatePose()
 
 void NakedHMDDeviceDriver::EnforceWindowPlacement()
 {
+	// Direct mode owns its own window; nothing of the compositor to correct.
+	if ( use_direct_mode_ )
+	{
+		return;
+	}
+
 	if ( display_component_ != nullptr )
 	{
 		display_component_->EnforceWindowPlacement();
@@ -928,5 +978,7 @@ void NakedHMDDeviceDriver::EnterStandby()
 
 void NakedHMDDeviceDriver::Deactivate()
 {
+	// Tear down the direct-mode output (window + D3D11) if any.
+	direct_mode_component_.reset();
 	device_index_ = vr::k_unTrackedDeviceIndexInvalid;
 }
