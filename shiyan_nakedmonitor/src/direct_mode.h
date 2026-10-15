@@ -18,7 +18,6 @@ struct ID3D11DeviceContext;
 struct IDXGISwapChain;
 struct ID3D11RenderTargetView;
 struct ID3D11Texture2D;
-struct IDXGIKeyedMutex;
 struct ID3D11ShaderResourceView;
 struct ID3D11VertexShader;
 struct ID3D11PixelShader;
@@ -64,7 +63,7 @@ private:
 	void Shutdown();
 	void DrawEye( int screen_half, int eye_index );
 	void DrawSolidColor();
-	ID3D11ShaderResourceView *FindSrv( vr::SharedTextureHandle_t handle, IDXGIKeyedMutex **out_mutex );
+	ID3D11ShaderResourceView *FindSrv( vr::SharedTextureHandle_t handle );
 
 	// Hang watchdog: logs which callback is stuck if one never returns.
 	void EnterCallback( const char *name );
@@ -117,25 +116,16 @@ private:
 		uint32_t pid = 0;              // process that created the set
 		std::vector< vr::SharedTextureHandle_t > handles;
 		std::vector< ID3D11Texture2D * > textures;
-		std::vector< IDXGIKeyedMutex * > mutexes;
 		std::vector< ID3D11ShaderResourceView * > srvs;
 		uint32_t next = 0;
 	};
 	std::map< vr::SharedTextureHandle_t, SwapSet > swap_sets_;
-
-	// How the swap textures are shared with the compositor:
-	//   0 = legacy IDXGIResource::GetSharedHandle (default; no keyed mutex)
-	//   1 = NT handle (D3D11_RESOURCE_MISC_SHARED_NTHANDLE | _SHARED_KEYEDMUTEX)
-	// If the preferred mode cannot even be created it falls back to the other.
-	int preferred_share_mode_ = 0;
-	int resolved_share_mode_ = -1;
 
 	static void ReleaseSet( SwapSet &set );
 	static bool SetOwnsSrv( const SwapSet &set, ID3D11ShaderResourceView *srv );
 
 	// Latest SubmitLayer inputs, ready to be drawn by Present.
 	ID3D11ShaderResourceView *eye_srv_[ 2 ] = { nullptr, nullptr };
-	IDXGIKeyedMutex *eye_mutex_[ 2 ] = { nullptr, nullptr };
 	float eye_uv_rect_[ 2 ][ 4 ] = { { 0.0f, 0.0f, 1.0f, 1.0f }, { 0.0f, 0.0f, 1.0f, 1.0f } };
 	bool have_eye_textures_ = false;
 
@@ -143,12 +133,6 @@ private:
 	// linear<->sRGB for free), 1 = "raw" (strip sRGB from the SRV, non-sRGB swap
 	// chain, byte-exact copy). Set via "direct_color_mode".
 	int color_mode_ = 0;
-
-	// Acquire/release the swap textures' keyed mutexes around the blit. Only has
-	// an effect when the textures actually carry a keyed mutex, i.e. when
-	// direct_texture_share = "keyedmutex". Set via "direct_texture_sync".
-	bool texture_sync_ = true;
-	int texture_sync_key_ = 0; // "direct_texture_sync_key"
 
 	// Present with vsync (presents block until vblank). Without it the compositor
 	// free-runs and pegs the GPU. Set via "direct_vsync".

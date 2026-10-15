@@ -55,16 +55,6 @@ const char *FormatName( DXGI_FORMAT format )
 	}
 }
 
-const char *ShareModeName( int mode )
-{
-	switch ( mode )
-	{
-	case 1: return "NT handle";
-	case 2: return "keyed mutex";
-	default: return "legacy shared";
-	}
-}
-
 long long NowMs()
 {
 	return std::chrono::duration_cast< std::chrono::milliseconds >(
@@ -119,27 +109,8 @@ NakedDirectModeComponent::NakedDirectModeComponent( int32_t window_x, int32_t wi
 	, window_height_( window_height )
 	, monitor_name_( std::move( monitor_name ) )
 {
-	// "shared" (default) = legacy shared handle, no keyed mutex.
-	// "nthandle"        = NT handle + keyed mutex (D3D11 11.1 strict sharing).
-	char buffer[ 64 ] = {};
-	vr::EVRSettingsError error = vr::VRSettingsError_None;
-	vr::VRSettings()->GetString( kDisplaySection, "direct_texture_share", buffer, sizeof( buffer ), &error );
-	const std::string share_mode = ( error == vr::VRSettingsError_None ) ? buffer : "shared";
-	if ( share_mode == "nthandle" )
-	{
-		preferred_share_mode_ = 1;
-	}
-	else if ( share_mode == "keyedmutex" )
-	{
-		preferred_share_mode_ = 2;
-	}
-	else
-	{
-		preferred_share_mode_ = 0;
-	}
-
 	// Vsync caps the whole pipeline at the display refresh rate.
-	error = vr::VRSettingsError_None;
+	vr::EVRSettingsError error = vr::VRSettingsError_None;
 	vsync_ = vr::VRSettings()->GetBool( kDisplaySection, "direct_vsync", &error );
 	if ( error != vr::VRSettingsError_None )
 	{
@@ -170,22 +141,8 @@ NakedDirectModeComponent::NakedDirectModeComponent( int32_t window_x, int32_t wi
 	const std::string color_mode = ( error == vr::VRSettingsError_None ) ? color_buffer : "srgb";
 	color_mode_ = ( color_mode == "raw" ) ? 1 : 0;
 
-	error = vr::VRSettingsError_None;
-	texture_sync_ = vr::VRSettings()->GetBool( kDisplaySection, "direct_texture_sync", &error );
-	if ( error != vr::VRSettingsError_None )
-	{
-		texture_sync_ = true;
-	}
-
-	error = vr::VRSettingsError_None;
-	texture_sync_key_ = vr::VRSettings()->GetInt32( kDisplaySection, "direct_texture_sync_key", &error );
-	if ( error != vr::VRSettingsError_None )
-	{
-		texture_sync_key_ = 0;
-	}
-
-	DriverLog( "shiyan_nakedmonitor: [direct] component created for window (%d, %d) %dx%d (monitor '%s', share '%s').",
-		window_x_, window_y_, window_width_, window_height_, monitor_name_.c_str(), share_mode.c_str() );
+	DriverLog( "shiyan_nakedmonitor: [direct] component created for window (%d, %d) %dx%d (monitor '%s').",
+		window_x_, window_y_, window_width_, window_height_, monitor_name_.c_str() );
 }
 
 NakedDirectModeComponent::~NakedDirectModeComponent()
@@ -327,10 +284,6 @@ void NakedDirectModeComponent::WindowThreadMain()
 
 void NakedDirectModeComponent::ReleaseSet( SwapSet &set )
 {
-	for ( IDXGIKeyedMutex *mutex : set.mutexes )
-	{
-		SafeRelease( mutex );
-	}
 	for ( ID3D11ShaderResourceView *srv : set.srvs )
 	{
 		SafeRelease( srv );
@@ -346,7 +299,6 @@ void NakedDirectModeComponent::ReleaseSet( SwapSet &set )
 			CloseHandle( reinterpret_cast< HANDLE >( handle ) );
 		}
 	}
-	set.mutexes.clear();
 	set.srvs.clear();
 	set.textures.clear();
 	set.handles.clear();
@@ -658,149 +610,92 @@ void NakedDirectModeComponent::CreateSwapTextureSet( uint32_t unPid, const SwapT
 
 	const DXGI_FORMAT format = static_cast< DXGI_FORMAT >( pSwapTextureSetDesc->nFormat );
 
-	D3D11_TEXTURE2D_DESC base = {};
-	base.Width = pSwapTextureSetDesc->nWidth;
-	base.Height = pSwapTextureSetDesc->nHeight;
-	base.MipLevels = 1;
-	base.ArraySize = 1;
-	base.Format = format;
-	base.SampleDesc.Count = 1; // shared textures cannot be multisampled
-	base.Usage = D3D11_USAGE_DEFAULT;
-	base.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+	D3D11_TEXTURE2D_DESC td = {};
+	td.Width = pSwapTextureSetDesc->nWidth;
+	td.Height = pSwapTextureSetDesc->nHeight;
+	td.MipLevels = 1;
+	td.ArraySize = 1;
+	td.Format = format;
+	td.SampleDesc.Count = 1; // shared textures cannot be multisampled
+	td.Usage = D3D11_USAGE_DEFAULT;
+	td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+	// Legacy shared handle: the only sharing flavour this SteamVR build opens
+	// (it uses OpenSharedResource). These textures carry no keyed mutex.
+	td.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
-	// mode 0: legacy shared handle (IDXGIResource::GetSharedHandle, unTextureFlags 0).
-	// mode 1: NT handle (needs NTHANDLE | KEYEDMUTEX, CreateSharedHandle, flag set).
-	auto buildSet = [&]( int mode, SwapSet &out, uint32_t &out_flags ) -> bool {
-		D3D11_TEXTURE2D_DESC td = base;
-		// mode 0: legacy shared (no mutex).
-		// mode 1: NT handle (NTHANDLE | KEYEDMUTEX, opened via OpenSharedResource1).
-		// mode 2: legacy handle + keyed mutex (opened via OpenSharedResource, so
-		//         this is the flavour SteamVR's compositor can actually use).
-		td.MiscFlags = ( mode == 1 )
-			? ( D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX )
-			: ( ( mode == 2 ) ? D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX : D3D11_RESOURCE_MISC_SHARED );
-
-		for ( int i = 0; i < 3; ++i )
+	SwapSet set;
+	for ( int i = 0; i < 3; ++i )
+	{
+		ID3D11Texture2D *texture = nullptr;
+		HRESULT hr = device_->CreateTexture2D( &td, nullptr, &texture );
+		if ( FAILED( hr ) || texture == nullptr )
 		{
-			ID3D11Texture2D *texture = nullptr;
-			HRESULT hr = device_->CreateTexture2D( &td, nullptr, &texture );
-			if ( FAILED( hr ) || texture == nullptr )
-			{
-				DriverLog( "shiyan_nakedmonitor: [direct] CreateTexture2D failed (0x%08X) [%s] for %ux%u %s.",
-					static_cast< unsigned >( hr ), ShareModeName( mode ), td.Width, td.Height, FormatName( format ) );
-				ReleaseSet( out );
-				return false;
-			}
+			DriverLog( "shiyan_nakedmonitor: [direct] CreateTexture2D failed (0x%08X) for %ux%u %s.",
+				static_cast< unsigned >( hr ), td.Width, td.Height, FormatName( format ) );
+			ReleaseSet( set );
+			return;
+		}
 
-			HANDLE handle = nullptr;
-			if ( mode == 1 )
-			{
-				IDXGIResource1 *resource = nullptr;
-				if ( SUCCEEDED( texture->QueryInterface( __uuidof( IDXGIResource1 ), reinterpret_cast< void ** >( &resource ) ) )
-					 && resource != nullptr )
-				{
-					resource->CreateSharedHandle( nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, &handle );
-					resource->Release();
-				}
-			}
-			else
-			{
-				IDXGIResource *resource = nullptr;
-				if ( SUCCEEDED( texture->QueryInterface( __uuidof( IDXGIResource ), reinterpret_cast< void ** >( &resource ) ) )
-					 && resource != nullptr )
-				{
-					resource->GetSharedHandle( &handle );
-					resource->Release();
-				}
-			}
+		IDXGIResource *resource = nullptr;
+		HANDLE handle = nullptr;
+		if ( SUCCEEDED( texture->QueryInterface( __uuidof( IDXGIResource ), reinterpret_cast< void ** >( &resource ) ) )
+			 && resource != nullptr )
+		{
+			resource->GetSharedHandle( &handle );
+			resource->Release();
+		}
+		if ( handle == nullptr )
+		{
+			DriverLog( "shiyan_nakedmonitor: [direct] GetSharedHandle failed for texture %d.", i );
+			SafeRelease( texture );
+			ReleaseSet( set );
+			return;
+		}
 
-			if ( handle == nullptr )
-			{
-				DriverLog( "shiyan_nakedmonitor: [direct] shared handle failed for texture %d [%s].", i, ShareModeName( mode ) );
-				SafeRelease( texture );
-				ReleaseSet( out );
-				return false;
-			}
-
-			// SRV for the blit. In "srgb" mode it keeps the texture's own format
-			// (sampling yields linear) so the sRGB swap chain re-encodes on write.
-			// In "raw" mode it drops the SRGB suffix for a byte-exact copy.
-			ID3D11ShaderResourceView *srv = nullptr;
-			HRESULT srv_hr = S_OK;
-			if ( color_mode_ == 0 )
+		// SRV for the blit. In "srgb" mode it keeps the texture's own format
+		// (sampling yields linear) so the sRGB swap chain re-encodes on write.
+		// In "raw" mode it drops the SRGB suffix for a byte-exact copy.
+		ID3D11ShaderResourceView *srv = nullptr;
+		HRESULT srv_hr = S_OK;
+		if ( color_mode_ == 0 )
+		{
+			srv_hr = device_->CreateShaderResourceView( texture, nullptr, &srv );
+		}
+		else
+		{
+			D3D11_SHADER_RESOURCE_VIEW_DESC svd = {};
+			svd.Format = StripSrgb( format );
+			svd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+			svd.Texture2D.MostDetailedMip = 0;
+			svd.Texture2D.MipLevels = 1;
+			srv_hr = device_->CreateShaderResourceView( texture, &svd, &srv );
+			if ( FAILED( srv_hr ) )
 			{
 				srv_hr = device_->CreateShaderResourceView( texture, nullptr, &srv );
 			}
-			else
-			{
-				D3D11_SHADER_RESOURCE_VIEW_DESC svd = {};
-				svd.Format = StripSrgb( format );
-				svd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-				svd.Texture2D.MostDetailedMip = 0;
-				svd.Texture2D.MipLevels = 1;
-				srv_hr = device_->CreateShaderResourceView( texture, &svd, &srv );
-				if ( FAILED( srv_hr ) )
-				{
-					srv_hr = device_->CreateShaderResourceView( texture, nullptr, &srv );
-				}
-			}
-			if ( FAILED( srv_hr ) || srv == nullptr )
-			{
-				DriverLog( "shiyan_nakedmonitor: [direct] CreateShaderResourceView failed (0x%08X).", static_cast< unsigned >( srv_hr ) );
-				CloseHandle( reinterpret_cast< HANDLE >( handle ) );
-				SafeRelease( texture );
-				ReleaseSet( out );
-				return false;
-			}
-
-			IDXGIKeyedMutex *keyed_mutex = nullptr;
-			texture->QueryInterface( __uuidof( IDXGIKeyedMutex ), reinterpret_cast< void ** >( &keyed_mutex ) );
-
-			out.textures.push_back( texture );
-			out.handles.push_back( reinterpret_cast< vr::SharedTextureHandle_t >( handle ) );
-			out.mutexes.push_back( keyed_mutex );
-			out.srvs.push_back( srv );
 		}
-
-		out_flags = ( mode == 1 ) ? vr::VRSwapTextureFlag_Shared_NTHandle : 0;
-		return true;
-	};
-
-	const int first_mode = ( resolved_share_mode_ >= 0 ) ? resolved_share_mode_ : preferred_share_mode_;
-	SwapSet set;
-	uint32_t flags = 0;
-	bool ok = buildSet( first_mode, set, flags );
-
-	// If the preferred sharing mode cannot even be created, fall back to the
-	// most compatible legacy-shared mode once (and remember what worked).
-	if ( !ok && resolved_share_mode_ < 0 && first_mode != 0 )
-	{
-		DriverLog( "shiyan_nakedmonitor: [direct] %s sharing failed to create; retrying with %s.",
-			ShareModeName( first_mode ), ShareModeName( 0 ) );
-		set = SwapSet{};
-		ok = buildSet( 0, set, flags );
-		if ( ok )
+		if ( FAILED( srv_hr ) || srv == nullptr )
 		{
-			resolved_share_mode_ = 0;
+			DriverLog( "shiyan_nakedmonitor: [direct] CreateShaderResourceView failed (0x%08X).", static_cast< unsigned >( srv_hr ) );
+			CloseHandle( reinterpret_cast< HANDLE >( handle ) );
+			SafeRelease( texture );
+			ReleaseSet( set );
+			return;
 		}
-	}
-	if ( !ok )
-	{
-		return;
-	}
-	if ( resolved_share_mode_ < 0 )
-	{
-		resolved_share_mode_ = first_mode;
+
+		set.textures.push_back( texture );
+		set.handles.push_back( reinterpret_cast< vr::SharedTextureHandle_t >( handle ) );
+		set.srvs.push_back( srv );
 	}
 
-	pOutSwapTextureSet->unTextureFlags = flags;
+	pOutSwapTextureSet->unTextureFlags = 0;
 	for ( int i = 0; i < 3; ++i )
 	{
 		pOutSwapTextureSet->rSharedTextureHandles[ i ] = set.handles[ i ];
 	}
 
-	DriverLog( "shiyan_nakedmonitor: [direct] created swap texture set for pid %u: %ux%u %s (3 buffers, %s sharing).",
-		unPid, base.Width, base.Height, FormatName( format ), ShareModeName( resolved_share_mode_ ) );
+	DriverLog( "shiyan_nakedmonitor: [direct] created swap texture set for pid %u: %ux%u %s (3 buffers).",
+		unPid, td.Width, td.Height, FormatName( format ) );
 
 	set.pid = unPid;
 	swap_sets_[ set.handles[ 0 ] ] = std::move( set );
@@ -912,13 +807,9 @@ void NakedDirectModeComponent::GetNextSwapTextureSetIndex( vr::SharedTextureHand
 	}
 }
 
-ID3D11ShaderResourceView *NakedDirectModeComponent::FindSrv( vr::SharedTextureHandle_t handle, IDXGIKeyedMutex **out_mutex )
+ID3D11ShaderResourceView *NakedDirectModeComponent::FindSrv( vr::SharedTextureHandle_t handle )
 {
 	// Caller must hold mutex_.
-	if ( out_mutex != nullptr )
-	{
-		*out_mutex = nullptr;
-	}
 	for ( auto &entry : swap_sets_ )
 	{
 		SwapSet &set = entry.second;
@@ -926,10 +817,6 @@ ID3D11ShaderResourceView *NakedDirectModeComponent::FindSrv( vr::SharedTextureHa
 		{
 			if ( set.handles[ i ] == handle && i < set.srvs.size() )
 			{
-				if ( out_mutex != nullptr && i < set.mutexes.size() )
-				{
-					*out_mutex = set.mutexes[ i ];
-				}
 				return set.srvs[ i ];
 			}
 		}
@@ -946,7 +833,7 @@ void NakedDirectModeComponent::SubmitLayer( const SubmitLayerPerEye_t ( &perEye 
 	// swap textures we created, so the SRVs are looked up directly (no open).
 	for ( int eye = 0; eye < 2; ++eye )
 	{
-		eye_srv_[ eye ] = FindSrv( perEye[ eye ].hTexture, &eye_mutex_[ eye ] );
+		eye_srv_[ eye ] = FindSrv( perEye[ eye ].hTexture );
 
 		const vr::VRTextureBounds_t &bounds = perEye[ eye ].bounds;
 		float u0 = bounds.uMin;
@@ -1078,25 +965,8 @@ void NakedDirectModeComponent::Present( vr::SharedTextureHandle_t syncTexture )
 		// Left half gets the left eye, right half the right eye (swapped if set).
 		const int left_eye = swap_eyes_ ? 1 : 0;
 		const int right_eye = 1 - left_eye;
-
-		// Texture-level sync: acquire the swap texture's keyed mutex before
-		// reading it and release it after (the mutex only exists when
-		// direct_texture_share = "nthandle").
-		auto drawWithSync = [this]( int screen_half, int eye_index ) {
-			IDXGIKeyedMutex *keyed = eye_mutex_[ eye_index ];
-			bool acquired = false;
-			if ( texture_sync_ && keyed != nullptr )
-			{
-				acquired = SUCCEEDED( keyed->AcquireSync( texture_sync_key_, 10 ) );
-			}
-			DrawEye( screen_half, eye_index );
-			if ( acquired )
-			{
-				keyed->ReleaseSync( texture_sync_key_ );
-			}
-		};
-		drawWithSync( 0, left_eye );
-		drawWithSync( 1, right_eye );
+		DrawEye( 0, left_eye );
+		DrawEye( 1, right_eye );
 
 		// Unbind the eye textures so the compositor can render into them again.
 		ID3D11ShaderResourceView *null_srv = nullptr;

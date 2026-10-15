@@ -83,9 +83,6 @@ under the same sections.
 | `is_on_desktop_property` | Keep **false**. `true` triggers the SteamVR error -202 prompt |
 | `display_debug_mode` | `true` = compositor uses a window (default). `false` = exclusive fullscreen |
 | `display_mode` | `extended` (default) = compositor-owned desktop window; `direct` = the driver owns the output window + D3D11 swap chain |
-| `direct_texture_share` | `shared` (default, **the only supported mode**) = legacy shared handle, no mutex. `keyedmutex` / `nthandle` are experimental and do not work with this SteamVR build (see below) |
-| `direct_texture_sync` | `true` (default) = acquire/release each swap texture's keyed mutex around the blit. Only has an effect when `direct_texture_share = keyedmutex` |
-| `direct_texture_sync_key` | Key used for the swap-texture `AcquireSync`/`ReleaseSync` (default `0`). SteamVR does not document its convention; adjust to match |
 | `direct_color_mode` | `srgb` (default) = sRGB SRV + sRGB swap chain, so the hardware does the linear<->gamma round trip; `raw` = byte-exact copy (non-sRGB SRV + non-sRGB swap chain) |
 | `direct_vsync` | `true` (default) = `Present` blocks on vblank, pacing the compositor to the refresh. Only used when `display_mode = direct` |
 
@@ -195,14 +192,12 @@ Limitations of the current skeleton:
   sync texture is opened once via `OpenSharedResource`, its keyed mutex acquired
   (`AcquireSync(0, 10)`) to signal "frame taken", then released again before the
   vsync-blocking `Present`.
-* Texture-level sync (experimental, **not usable with this SteamVR build**): the
-  driver can acquire/release a per-texture keyed mutex around the blit, but only
-  the legacy `shared` textures work end to end. `nthandle` textures fail with
-  `VRInitError_Compositor_OpenDriverDirectModeResolveTextures` (the compositor
-  opens swap textures via `OpenSharedResource`, which rejects NT handles), and
-  `keyedmutex` textures are accepted but render black even with the driver's
-  acquire disabled (the compositor's key convention is undocumented). So the
-  supported mode is `shared`, which has no mutex, and tearing remains possible.
+* The swap textures are shared with the legacy handle
+  (`D3D11_RESOURCE_MISC_SHARED` + `IDXGIResource::GetSharedHandle`) - the only
+  flavour this SteamVR build opens (`OpenSharedResource`). NT handles are rejected
+  (`VRInitError_Compositor_OpenDriverDirectModeResolveTextures`) and keyed-mutex
+  textures render black, so the textures carry no mutex and tearing remains
+  possible.
 * Colour: the eye textures are `_SRGB`. In the default `srgb` mode the SRV keeps
   the texture's own sRGB format (sampling returns linear) and the swap chain is
   `_SRGB` (the GPU re-encodes on write), i.e. a correct linear<->gamma round trip.
