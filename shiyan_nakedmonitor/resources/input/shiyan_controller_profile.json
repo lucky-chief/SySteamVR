@@ -1,0 +1,36 @@
+{
+	"jsonid": "input_profile",
+	"controller_type": "shiyan_controller",
+	"input_bindingui_mode": "controller_handed",
+	"input_source": {
+		"/input/trigger": {
+			"type": "trigger",
+			"order": 1
+		},
+		"/input/grip": {
+			"type": "trigger",
+			"order": 2
+		},
+		"/input/a": {
+			"type": "button",
+			"order": 3
+		},
+		"/input/b": {
+			"type": "button",
+			"order": 4
+		},
+		"/input/application_menu": {
+			"type": "button",
+			"order": 5
+		},
+		"/input/joystick": {
+			"type": "joystick",
+			"order": 6
+		},
+		"/output/haptic": {
+			"type": "vibration",
+			"order": 7
+		}
+	},
+	"default_bindings": []
+}

@@ -6,6 +6,15 @@
 		"serial_number": "ShiyanNakedMonitor-0001",
 		"model_number": "Shiyan Naked Monitor"
 	},
+	"shiyan_nakedmonitor_controller": {
+		"enabled": true,
+		"serial_number": "ShiyanNakedController-0001",
+		"model_number": "Shiyan Virtual Controller",
+		"offset_x": 0.1,
+		"offset_y": -0.2,
+		"offset_z": 0.1,
+		"mouse_sensitivity": 0.0025
+	},
 	"shiyan_nakedmonitor_display": {
 		"auto_place_window": true,
 		"monitor_name_substring": "SYS_A_1E320H",
@@ -26,7 +35,7 @@
 		"screen_height_m": 0.3927,
 		"screen_center_height_m": 1.2,
 		"screen_distance_m": 0.5,
-		"projection_push_mode": 2,
+		"projection_push_mode": 0,
 		"wait_3d_resolution": false,
 		"is_on_desktop_property": false,
 		"display_debug_mode": true,

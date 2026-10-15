@@ -3,6 +3,14 @@
 
 #include "driverlog.h"
 #include "eye_tracker.h"
+#include "raw_input.h"
+
+static bool GetBoolSetting( const char *pchSection, const char *pchKey, bool bDefault )
+{
+	vr::EVRSettingsError error = vr::VRSettingsError_None;
+	const bool value = vr::VRSettings()->GetBool( pchSection, pchKey, &error );
+	return ( error == vr::VRSettingsError_None ) ? value : bDefault;
+}
 
 vr::EVRInitError NakedDeviceProvider::Init( vr::IVRDriverContext *pDriverContext )
 {
@@ -24,6 +32,30 @@ vr::EVRInitError NakedDeviceProvider::Init( vr::IVRDriverContext *pDriverContext
 	}
 
 	DriverLog( "shiyan_nakedmonitor: HMD device added." );
+
+	// --- Virtual keyboard/mouse controller (right hand) --------------------
+	if ( GetBoolSetting( "shiyan_nakedmonitor_controller", "enabled", true ) )
+	{
+		raw_input_started_ = RawInput::Start();
+		if ( !raw_input_started_ )
+		{
+			DriverLog( "shiyan_nakedmonitor: WARNING - raw input capture failed to start; "
+					   "controller will idle with no key/mouse data." );
+		}
+
+		controller_ = std::make_unique< ShiyanNakedController >();
+		if ( !vr::VRServerDriverHost()->TrackedDeviceAdded(
+				controller_->GetSerialNumber().c_str(), vr::TrackedDeviceClass_Controller, controller_.get() ) )
+		{
+			DriverLog( "shiyan_nakedmonitor: failed to add virtual controller device." );
+			controller_ = nullptr;
+		}
+		else
+		{
+			DriverLog( "shiyan_nakedmonitor: virtual controller device added." );
+		}
+	}
+
 	return vr::VRInitError_None;
 }
 
@@ -55,10 +87,20 @@ void NakedDeviceProvider::RunFrame()
 		hmd_device_->EnforceWindowPlacement();
 	}
 
-	// Drain the event queue so it does not back up.
+	// --- Virtual controller: feed the latest keyboard/mouse snapshot --------
+	if ( controller_ != nullptr )
+	{
+		controller_->RunFrame( RawInput::Consume() );
+	}
+
+	// Drain the event queue (haptics go to the controller) so it does not back up.
 	vr::VREvent_t event = {};
 	while ( vr::VRServerDriverHost()->PollNextEvent( &event, sizeof( vr::VREvent_t ) ) )
 	{
+		if ( controller_ != nullptr )
+		{
+			controller_->ProcessEvent( event );
+		}
 	}
 }
 
@@ -72,7 +114,15 @@ void NakedDeviceProvider::LeaveStandby()
 
 void NakedDeviceProvider::Cleanup()
 {
+	controller_ = nullptr;
 	hmd_device_ = nullptr;
+
+	// Stop the raw-input capture thread before vrserver tears the context down.
+	if ( raw_input_started_ )
+	{
+		RawInput::Shutdown();
+		raw_input_started_ = false;
+	}
 
 	// Unregister the eye-tracking SDK (leaves an in-flight background Register
 	// alone, see EyeTracker::Shutdown).
