@@ -57,7 +57,12 @@ const char *FormatName( DXGI_FORMAT format )
 
 const char *ShareModeName( int mode )
 {
-	return ( mode == 1 ) ? "NT handle" : "legacy shared";
+	switch ( mode )
+	{
+	case 1: return "NT handle";
+	case 2: return "keyed mutex";
+	default: return "legacy shared";
+	}
 }
 
 long long NowMs()
@@ -120,7 +125,18 @@ NakedDirectModeComponent::NakedDirectModeComponent( int32_t window_x, int32_t wi
 	vr::EVRSettingsError error = vr::VRSettingsError_None;
 	vr::VRSettings()->GetString( kDisplaySection, "direct_texture_share", buffer, sizeof( buffer ), &error );
 	const std::string share_mode = ( error == vr::VRSettingsError_None ) ? buffer : "shared";
-	preferred_share_mode_ = ( share_mode == "nthandle" ) ? 1 : 0;
+	if ( share_mode == "nthandle" )
+	{
+		preferred_share_mode_ = 1;
+	}
+	else if ( share_mode == "keyedmutex" )
+	{
+		preferred_share_mode_ = 2;
+	}
+	else
+	{
+		preferred_share_mode_ = 0;
+	}
 
 	// Vsync caps the whole pipeline at the display refresh rate.
 	error = vr::VRSettingsError_None;
@@ -142,6 +158,30 @@ NakedDirectModeComponent::NakedDirectModeComponent( int32_t window_x, int32_t wi
 	if ( error != vr::VRSettingsError_None || display_frequency_ < 1.0f )
 	{
 		display_frequency_ = 60.0f;
+	}
+
+	// "srgb" (default): the eye textures are sampled through their sRGB view
+	// (linear values) and the sRGB swap chain re-encodes on write, so the
+	// hardware performs the correct linear<->gamma round trip.
+	// "raw": byte-exact copy (non-sRGB SRV + non-sRGB swap chain).
+	char color_buffer[ 32 ] = {};
+	error = vr::VRSettingsError_None;
+	vr::VRSettings()->GetString( kDisplaySection, "direct_color_mode", color_buffer, sizeof( color_buffer ), &error );
+	const std::string color_mode = ( error == vr::VRSettingsError_None ) ? color_buffer : "srgb";
+	color_mode_ = ( color_mode == "raw" ) ? 1 : 0;
+
+	error = vr::VRSettingsError_None;
+	texture_sync_ = vr::VRSettings()->GetBool( kDisplaySection, "direct_texture_sync", &error );
+	if ( error != vr::VRSettingsError_None )
+	{
+		texture_sync_ = true;
+	}
+
+	error = vr::VRSettingsError_None;
+	texture_sync_key_ = vr::VRSettings()->GetInt32( kDisplaySection, "direct_texture_sync_key", &error );
+	if ( error != vr::VRSettingsError_None )
+	{
+		texture_sync_key_ = 0;
 	}
 
 	DriverLog( "shiyan_nakedmonitor: [direct] component created for window (%d, %d) %dx%d (monitor '%s', share '%s').",
@@ -391,7 +431,9 @@ bool NakedDirectModeComponent::EnsureInitialized()
 	DXGI_SWAP_CHAIN_DESC desc = {};
 	desc.BufferDesc.Width = static_cast< UINT >( window_width_ );
 	desc.BufferDesc.Height = static_cast< UINT >( window_height_ );
-	desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	// sRGB swap chain: the pixel shader outputs linear values and the hardware
+	// encodes to sRGB on write (matching the sRGB eye textures it sampled).
+	desc.BufferDesc.Format = ( color_mode_ == 0 ) ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
 	desc.SampleDesc.Count = 1;
 	desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
 	desc.BufferCount = 2;
@@ -630,9 +672,13 @@ void NakedDirectModeComponent::CreateSwapTextureSet( uint32_t unPid, const SwapT
 	// mode 1: NT handle (needs NTHANDLE | KEYEDMUTEX, CreateSharedHandle, flag set).
 	auto buildSet = [&]( int mode, SwapSet &out, uint32_t &out_flags ) -> bool {
 		D3D11_TEXTURE2D_DESC td = base;
+		// mode 0: legacy shared (no mutex).
+		// mode 1: NT handle (NTHANDLE | KEYEDMUTEX, opened via OpenSharedResource1).
+		// mode 2: legacy handle + keyed mutex (opened via OpenSharedResource, so
+		//         this is the flavour SteamVR's compositor can actually use).
 		td.MiscFlags = ( mode == 1 )
 			? ( D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX )
-			: D3D11_RESOURCE_MISC_SHARED;
+			: ( ( mode == 2 ) ? D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX : D3D11_RESOURCE_MISC_SHARED );
 
 		for ( int i = 0; i < 3; ++i )
 		{
@@ -676,18 +722,27 @@ void NakedDirectModeComponent::CreateSwapTextureSet( uint32_t unPid, const SwapT
 				return false;
 			}
 
-			// SRV for the Stage 2 blit. The SRV uses the non-SRGB view so the
-			// display-ready bytes pass through unchanged.
-			D3D11_SHADER_RESOURCE_VIEW_DESC svd = {};
-			svd.Format = StripSrgb( format );
-			svd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-			svd.Texture2D.MostDetailedMip = 0;
-			svd.Texture2D.MipLevels = 1;
+			// SRV for the blit. In "srgb" mode it keeps the texture's own format
+			// (sampling yields linear) so the sRGB swap chain re-encodes on write.
+			// In "raw" mode it drops the SRGB suffix for a byte-exact copy.
 			ID3D11ShaderResourceView *srv = nullptr;
-			HRESULT srv_hr = device_->CreateShaderResourceView( texture, &svd, &srv );
-			if ( FAILED( srv_hr ) )
+			HRESULT srv_hr = S_OK;
+			if ( color_mode_ == 0 )
 			{
 				srv_hr = device_->CreateShaderResourceView( texture, nullptr, &srv );
+			}
+			else
+			{
+				D3D11_SHADER_RESOURCE_VIEW_DESC svd = {};
+				svd.Format = StripSrgb( format );
+				svd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+				svd.Texture2D.MostDetailedMip = 0;
+				svd.Texture2D.MipLevels = 1;
+				srv_hr = device_->CreateShaderResourceView( texture, &svd, &srv );
+				if ( FAILED( srv_hr ) )
+				{
+					srv_hr = device_->CreateShaderResourceView( texture, nullptr, &srv );
+				}
 			}
 			if ( FAILED( srv_hr ) || srv == nullptr )
 			{
@@ -716,18 +771,17 @@ void NakedDirectModeComponent::CreateSwapTextureSet( uint32_t unPid, const SwapT
 	uint32_t flags = 0;
 	bool ok = buildSet( first_mode, set, flags );
 
-	// If the preferred sharing mode cannot even be created, try the other once
-	// (and remember which one works for the rest of the session).
-	if ( !ok && resolved_share_mode_ < 0 )
+	// If the preferred sharing mode cannot even be created, fall back to the
+	// most compatible legacy-shared mode once (and remember what worked).
+	if ( !ok && resolved_share_mode_ < 0 && first_mode != 0 )
 	{
-		const int alt_mode = 1 - first_mode;
 		DriverLog( "shiyan_nakedmonitor: [direct] %s sharing failed to create; retrying with %s.",
-			ShareModeName( first_mode ), ShareModeName( alt_mode ) );
+			ShareModeName( first_mode ), ShareModeName( 0 ) );
 		set = SwapSet{};
-		ok = buildSet( alt_mode, set, flags );
+		ok = buildSet( 0, set, flags );
 		if ( ok )
 		{
-			resolved_share_mode_ = alt_mode;
+			resolved_share_mode_ = 0;
 		}
 	}
 	if ( !ok )
@@ -858,9 +912,13 @@ void NakedDirectModeComponent::GetNextSwapTextureSetIndex( vr::SharedTextureHand
 	}
 }
 
-ID3D11ShaderResourceView *NakedDirectModeComponent::FindSrv( vr::SharedTextureHandle_t handle )
+ID3D11ShaderResourceView *NakedDirectModeComponent::FindSrv( vr::SharedTextureHandle_t handle, IDXGIKeyedMutex **out_mutex )
 {
 	// Caller must hold mutex_.
+	if ( out_mutex != nullptr )
+	{
+		*out_mutex = nullptr;
+	}
 	for ( auto &entry : swap_sets_ )
 	{
 		SwapSet &set = entry.second;
@@ -868,6 +926,10 @@ ID3D11ShaderResourceView *NakedDirectModeComponent::FindSrv( vr::SharedTextureHa
 		{
 			if ( set.handles[ i ] == handle && i < set.srvs.size() )
 			{
+				if ( out_mutex != nullptr && i < set.mutexes.size() )
+				{
+					*out_mutex = set.mutexes[ i ];
+				}
 				return set.srvs[ i ];
 			}
 		}
@@ -884,7 +946,7 @@ void NakedDirectModeComponent::SubmitLayer( const SubmitLayerPerEye_t ( &perEye 
 	// swap textures we created, so the SRVs are looked up directly (no open).
 	for ( int eye = 0; eye < 2; ++eye )
 	{
-		eye_srv_[ eye ] = FindSrv( perEye[ eye ].hTexture );
+		eye_srv_[ eye ] = FindSrv( perEye[ eye ].hTexture, &eye_mutex_[ eye ] );
 
 		const vr::VRTextureBounds_t &bounds = perEye[ eye ].bounds;
 		float u0 = bounds.uMin;
@@ -1016,8 +1078,25 @@ void NakedDirectModeComponent::Present( vr::SharedTextureHandle_t syncTexture )
 		// Left half gets the left eye, right half the right eye (swapped if set).
 		const int left_eye = swap_eyes_ ? 1 : 0;
 		const int right_eye = 1 - left_eye;
-		DrawEye( 0, left_eye );
-		DrawEye( 1, right_eye );
+
+		// Texture-level sync: acquire the swap texture's keyed mutex before
+		// reading it and release it after (the mutex only exists when
+		// direct_texture_share = "nthandle").
+		auto drawWithSync = [this]( int screen_half, int eye_index ) {
+			IDXGIKeyedMutex *keyed = eye_mutex_[ eye_index ];
+			bool acquired = false;
+			if ( texture_sync_ && keyed != nullptr )
+			{
+				acquired = SUCCEEDED( keyed->AcquireSync( texture_sync_key_, 10 ) );
+			}
+			DrawEye( screen_half, eye_index );
+			if ( acquired )
+			{
+				keyed->ReleaseSync( texture_sync_key_ );
+			}
+		};
+		drawWithSync( 0, left_eye );
+		drawWithSync( 1, right_eye );
 
 		// Unbind the eye textures so the compositor can render into them again.
 		ID3D11ShaderResourceView *null_srv = nullptr;

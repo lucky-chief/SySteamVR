@@ -64,7 +64,7 @@ private:
 	void Shutdown();
 	void DrawEye( int screen_half, int eye_index );
 	void DrawSolidColor();
-	ID3D11ShaderResourceView *FindSrv( vr::SharedTextureHandle_t handle );
+	ID3D11ShaderResourceView *FindSrv( vr::SharedTextureHandle_t handle, IDXGIKeyedMutex **out_mutex );
 
 	// Hang watchdog: logs which callback is stuck if one never returns.
 	void EnterCallback( const char *name );
@@ -135,8 +135,20 @@ private:
 
 	// Latest SubmitLayer inputs, ready to be drawn by Present.
 	ID3D11ShaderResourceView *eye_srv_[ 2 ] = { nullptr, nullptr };
+	IDXGIKeyedMutex *eye_mutex_[ 2 ] = { nullptr, nullptr };
 	float eye_uv_rect_[ 2 ][ 4 ] = { { 0.0f, 0.0f, 1.0f, 1.0f }, { 0.0f, 0.0f, 1.0f, 1.0f } };
 	bool have_eye_textures_ = false;
+
+	// Colour pipeline. 0 = sRGB SRV + sRGB swap chain (default; the hardware does
+	// linear<->sRGB for free), 1 = "raw" (strip sRGB from the SRV, non-sRGB swap
+	// chain, byte-exact copy). Set via "direct_color_mode".
+	int color_mode_ = 0;
+
+	// Acquire/release the swap textures' keyed mutexes around the blit. Only has
+	// an effect when the textures actually carry a keyed mutex, i.e. when
+	// direct_texture_share = "keyedmutex". Set via "direct_texture_sync".
+	bool texture_sync_ = true;
+	int texture_sync_key_ = 0; // "direct_texture_sync_key"
 
 	// Present with vsync (presents block until vblank). Without it the compositor
 	// free-runs and pegs the GPU. Set via "direct_vsync".
