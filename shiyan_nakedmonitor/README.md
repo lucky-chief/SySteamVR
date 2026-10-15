@@ -85,6 +85,7 @@ under the same sections.
 | `display_mode` | `extended` (default) = compositor-owned desktop window; `direct` = the driver owns the output window + D3D11 swap chain |
 | `direct_color_mode` | `srgb` (default) = sRGB SRV + sRGB swap chain, so the hardware does the linear<->gamma round trip; `raw` = byte-exact copy (non-sRGB SRV + non-sRGB swap chain) |
 | `direct_vsync` | `true` (default) = `Present` blocks on vblank, pacing the compositor to the refresh. Only used when `display_mode = direct` |
+| `direct_window_topmost` | `false` (default) = the output window behaves like a normal window, so Alt+Tab and other windows work (the window itself appears in Alt+Tab). `true` keeps the VR image above everything (for a dedicated panel), which hides other windows behind it |
 
 ### About the vertical FOV
 

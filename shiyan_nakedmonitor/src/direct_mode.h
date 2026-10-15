@@ -146,6 +146,11 @@ private:
 	// Swap the two halves if the panel is wired mirrored. Set via "swap_eyes".
 	bool swap_eyes_ = false;
 
+	// Keep the output window above all other windows. Off by default: a topmost
+	// full-screen window hides every other window and makes Alt+Tab look broken.
+	// Set via "direct_window_topmost".
+	bool topmost_ = false;
+
 	// Sync-texture handshake (see Driver_API_Documentation.md). The compositor
 	// hands Present() a shared texture whose keyed mutex the driver acquires to
 	// signal "frame taken"; without it the compositor times out every frame.

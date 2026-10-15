@@ -125,6 +125,13 @@ NakedDirectModeComponent::NakedDirectModeComponent( int32_t window_x, int32_t wi
 	}
 
 	error = vr::VRSettingsError_None;
+	topmost_ = vr::VRSettings()->GetBool( kDisplaySection, "direct_window_topmost", &error );
+	if ( error != vr::VRSettingsError_None )
+	{
+		topmost_ = false;
+	}
+
+	error = vr::VRSettingsError_None;
 	display_frequency_ = vr::VRSettings()->GetFloat( kDisplaySection, "display_frequency", &error );
 	if ( error != vr::VRSettingsError_None || display_frequency_ < 1.0f )
 	{
@@ -249,15 +256,17 @@ void NakedDirectModeComponent::WindowThreadMain()
 	wc.lpszClassName = kOutputWindowClass;
 	RegisterClassExW( &wc );
 
-	HWND hwnd = CreateWindowExW( WS_EX_TOPMOST, kOutputWindowClass, L"Shiyan Naked Monitor Output",
+	// The output window is a normal top-level window (so it shows up in Alt+Tab
+	// and can be switched back to). Topmost is optional: it keeps the VR image
+	// visible on a dedicated panel, but hides every other window behind it.
+	const DWORD ex_style = topmost_ ? WS_EX_TOPMOST : 0;
+	HWND hwnd = CreateWindowExW( ex_style, kOutputWindowClass, L"Shiyan Naked Monitor Output",
 		WS_POPUP | WS_VISIBLE, window_x_, window_y_, window_width_, window_height_,
 		nullptr, nullptr, instance, nullptr );
 	if ( hwnd != nullptr )
 	{
-		// Topmost so DWM keeps scanning it out (an occluded output window can
-		// make DXGI Present block).
-		SetWindowPos( hwnd, HWND_TOPMOST, window_x_, window_y_, window_width_, window_height_,
-			SWP_NOACTIVATE | SWP_SHOWWINDOW );
+		SetWindowPos( hwnd, topmost_ ? HWND_TOPMOST : HWND_NOTOPMOST,
+			window_x_, window_y_, window_width_, window_height_, SWP_NOACTIVATE | SWP_SHOWWINDOW );
 	}
 	window_ = hwnd;
 	window_thread_id_.store( GetCurrentThreadId() );

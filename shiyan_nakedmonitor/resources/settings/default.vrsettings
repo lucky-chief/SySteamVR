@@ -30,6 +30,7 @@
 		"display_mode": "direct",
 		"direct_color_mode": "srgb",
 		"direct_vsync": true,
+		"direct_window_topmost": false,
 		"window_x": 0,
 		"window_y": 0,
 		"window_width": 2560,
