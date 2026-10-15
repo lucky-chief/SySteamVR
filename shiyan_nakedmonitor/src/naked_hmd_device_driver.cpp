@@ -331,9 +331,13 @@ bool NakedDisplayComponent::IsDisplayOnDesktop()
 
 bool NakedDisplayComponent::IsDisplayRealDisplay()
 {
-	// Not a "real" display from the runtime's point of view; prevents it from
-	// trying to drive a display output directly.
-	return false;
+	// A REAL display, not a fictional one: our HMD is an actual monitor on the
+	// desktop. Returning true makes vrcompositor treat the output as a real
+	// panel (window placement + full stereo present into the window); with
+	// false (as in Valve's old sample) the compositor falls back to a
+	// single-eye debug/mirror present and the SBS split never reaches the
+	// screen. See ValveSoftware/openvr issues #200 and #958.
+	return true;
 }
 
 void NakedDisplayComponent::GetRecommendedRenderTargetSize( uint32_t *pnWidth, uint32_t *pnHeight )
@@ -359,6 +363,16 @@ void NakedDisplayComponent::GetEyeOutputViewport( vr::EVREye eEye, uint32_t *pnX
 	// Left eye on the left half, right eye on the right half: this is a plain
 	// side-by-side layout, which is exactly what the SBS panel expects.
 	*pnX = is_left ? 0 : half_width;
+
+	// Log the first few calls so the compositor's actual viewport requests are
+	// visible in vrserver.txt (they are not logged anywhere else).
+	static int sViewportLogCount = 0;
+	if ( sViewportLogCount < 6 )
+	{
+		++sViewportLogCount;
+		DriverLog( "shiyan_nakedmonitor: GetEyeOutputViewport(%s) -> (%u, %u) %ux%u.",
+			is_left ? "left" : "right", *pnX, *pnY, *pnWidth, *pnHeight );
+	}
 }
 
 void NakedDisplayComponent::GetProjectionRaw( vr::EVREye eEye, float *pfLeft, float *pfRight, float *pfTop, float *pfBottom )
@@ -391,6 +405,14 @@ void NakedDisplayComponent::GetWindowBounds( int32_t *pnX, int32_t *pnY, uint32_
 	*pnY = resolved_window_y_;
 	*pnWidth = static_cast< uint32_t >( resolved_window_width_ );
 	*pnHeight = static_cast< uint32_t >( resolved_window_height_ );
+
+	static int sBoundsLogCount = 0;
+	if ( sBoundsLogCount < 2 )
+	{
+		++sBoundsLogCount;
+		DriverLog( "shiyan_nakedmonitor: GetWindowBounds -> (%d, %d) %ux%u.",
+			*pnX, *pnY, *pnWidth, *pnHeight );
+	}
 }
 
 bool NakedDisplayComponent::ComputeInverseDistortion( vr::HmdVector2_t *pResult, vr::EVREye eEye, uint32_t unChannel, float fU, float fV )
