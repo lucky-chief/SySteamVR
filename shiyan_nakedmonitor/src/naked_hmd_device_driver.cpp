@@ -263,6 +263,65 @@ static bool FindMonitorByResolution( int, int, int32_t *, int32_t * )
 #endif
 
 //-----------------------------------------------------------------------------
+// Pre-startup panel preparation (see header)
+//-----------------------------------------------------------------------------
+void PreparePanelBeforeDeviceAdd()
+{
+	if ( !GetBoolOrDefault( kDisplaySection, "eye_tracking", true ) )
+	{
+		DriverLog( "shiyan_nakedmonitor: eye tracking disabled - panel stays in 2D mode." );
+		return;
+	}
+
+	EyeTracker::Start();
+
+	// 1) Wait for the vendor Register (network round trip to HvHost; 10+ s when
+	//    the service is cold). Bounded so a dead service cannot stall vrserver.
+	if ( !EyeTracker::WaitForRegister( 30.0 ) )
+	{
+		DriverLog( "shiyan_nakedmonitor: eye-tracking Register failed or timed out - continuing "
+				   "in 2D mode with default eye positions." );
+		return;
+	}
+
+	// 2) The tracker only streams usable eye positions while the panel is in
+	//    3D (SBS) mode - same sequence as the OpenXR runtime's session start.
+	EyeTracker::Enter3DMode();
+
+#ifdef _WIN32
+	// 3) OPTIONAL (default off): 3D mode can re-time the panel (3840x2160 ->
+	//    7680x2160) on some setups. vrserver samples GetWindowBounds and
+	//    GetEyeOutputViewport exactly once, right after the device is added, so
+	//    IF the resolution is expected to change we poll until the named monitor
+	//    already reports the configured size. Currently the panel is driven at
+	//    its current resolution, so this wait stays disabled (wait_3d_resolution).
+	if ( GetBoolOrDefault( kDisplaySection, "wait_3d_resolution", false ) )
+	{
+		std::string monitorName;
+		GetStringOrDefault( kDisplaySection, "monitor_name_substring", "", monitorName );
+		const int32_t expectedWidth = GetInt32OrDefault( kDisplaySection, "window_width", 7680 );
+		const int32_t expectedHeight = GetInt32OrDefault( kDisplaySection, "window_height", 2160 );
+
+		MonitorMatch match = {};
+		for ( int attempt = 0; attempt < 40; ++attempt ) // up to 10 s
+		{
+			if ( FindMonitorByName( monitorName, &match )
+				 && match.width == expectedWidth && match.height == expectedHeight )
+			{
+				DriverLog( "shiyan_nakedmonitor: panel now at 3D resolution %dx%d at (%d, %d).",
+					match.width, match.height, match.x, match.y );
+				return;
+			}
+			::Sleep( 250 );
+		}
+		DriverLog( "shiyan_nakedmonitor: WARNING - panel did not reach %dx%d within 10 s (now %dx%d); "
+				   "window/viewport geometry may be wrong for 3D mode.",
+			expectedWidth, expectedHeight, match.width, match.height );
+	}
+#endif
+}
+
+//-----------------------------------------------------------------------------
 // NakedDisplayComponent
 //-----------------------------------------------------------------------------
 NakedDisplayComponent::NakedDisplayComponent( const NakedDisplayConfig &config )

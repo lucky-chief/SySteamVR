@@ -447,6 +447,8 @@ std::mutex g_stateMutex;
 bool g_started = false;
 bool g_ready = false;          // Register finished OK
 bool g_trackingHealthy = false;
+bool g_want3D = false;         // panel should be in 3D (SBS) mode
+bool g_display3DApplied = false; // SetDisplayMode(3) already issued
 float g_eyeL[ 3 ] = { kFallbackLeftEye[ 0 ], kFallbackLeftEye[ 1 ], kFallbackLeftEye[ 2 ] };
 float g_eyeR[ 3 ] = { kFallbackRightEye[ 0 ], kFallbackRightEye[ 1 ], kFallbackRightEye[ 2 ] };
 float g_screenW = kDefaultScreenWidthMeters;
@@ -454,6 +456,36 @@ float g_screenH = kDefaultScreenHeightMeters;
 bool g_screenFromSdk = false;
 std::chrono::steady_clock::time_point g_lastPumpTime;
 bool g_lastPumpValid = false;
+
+// Issue SetDisplayMode(3) once the panel is wanted in 3D AND the vendor
+// Register has finished (never touch other exports while Register is pending -
+// it may hold their internal locks).
+void Apply3DModeIfReadyLocked()
+{
+	// NOTE: called without g_stateMutex held (it takes g_vendorMutex via Bc*).
+	bool want = false;
+	bool applied = false;
+	{
+		std::lock_guard< std::mutex > lock( g_stateMutex );
+		want = g_want3D;
+		applied = g_display3DApplied;
+	}
+	if ( !want || applied || BcRegisterStatus() != kRegisterOk )
+	{
+		return;
+	}
+	if ( BcSetDisplayMode( 3 /* DISPLAY_MODE_3D (SBS) */ ) >= 0 )
+	{
+		std::lock_guard< std::mutex > lock( g_stateMutex );
+		g_display3DApplied = true;
+		DriverLog( "shiyan_nakedmonitor: panel switched to 3D (SBS) mode (eye positions only "
+				   "flow in this mode)" );
+	}
+	else
+	{
+		DriverLog( "shiyan_nakedmonitor: SetDisplayMode(3) failed; eye tracking may stay idle" );
+	}
+}
 
 } // namespace
 
@@ -490,6 +522,38 @@ void Start()
 	BcBeginRegister(); // non-blocking
 }
 
+bool WaitForRegister( double timeoutSeconds )
+{
+	const auto deadline = std::chrono::steady_clock::now()
+		+ std::chrono::milliseconds( static_cast< int64_t >( timeoutSeconds * 1000.0 ) );
+	for ( ;; )
+	{
+		const int status = BcRegisterStatus();
+		if ( status == kRegisterOk )
+		{
+			return true;
+		}
+		if ( status == kRegisterFailed )
+		{
+			return false;
+		}
+		if ( std::chrono::steady_clock::now() >= deadline )
+		{
+			return false;
+		}
+		::Sleep( 50 );
+	}
+}
+
+void Enter3DMode()
+{
+	{
+		std::lock_guard< std::mutex > lock( g_stateMutex );
+		g_want3D = true;
+	}
+	Apply3DModeIfReadyLocked();
+}
+
 void Pump()
 {
 	{
@@ -515,6 +579,10 @@ void Pump()
 			DriverLog( "shiyan_nakedmonitor: binocular camera ready (background Register finished)" );
 		}
 	}
+
+	// Late-registration path: apply a requested 3D switch once Register is done
+	// (the pre-device-add path usually already did it).
+	Apply3DModeIfReadyLocked();
 
 	// Panel physical size: fetch once the SDK link is up; retry every frame
 	// until it answers (same as the OpenXR runtime's PumpInit).
@@ -660,6 +728,11 @@ bool IsTracking()
 
 void Shutdown()
 {
+	{
+		std::lock_guard< std::mutex > lock( g_stateMutex );
+		g_want3D = false;
+	}
+
 	const int status = BcRegisterStatus();
 	if ( status == kRegisterPending )
 	{
@@ -668,6 +741,19 @@ void Shutdown()
 		DriverLog( "shiyan_nakedmonitor: background eye-tracking Register still in flight at "
 				   "shutdown; leaving it to finish" );
 		return;
+	}
+
+	// Mirror of shutdown_for_dll_unload in the reference project: drop the panel
+	// back to 2D first, then Unregister.
+	bool was3D = false;
+	{
+		std::lock_guard< std::mutex > lock( g_stateMutex );
+		was3D = g_display3DApplied;
+		g_display3DApplied = false;
+	}
+	if ( was3D )
+	{
+		BcSetDisplayMode( 2 /* DISPLAY_MODE_2D */ );
 	}
 	if ( status == kRegisterOk )
 	{

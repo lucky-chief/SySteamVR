@@ -7,6 +7,17 @@
 
 #include "openvr_driver.h"
 
+//-----------------------------------------------------------------------------
+// Bring the panel into the state the runtime must observe at startup: registers
+// the eye tracker (bounded wait - the vendor Register takes seconds), switches
+// the panel to 3D (SBS) mode (eye positions only flow there) and waits until
+// Windows reports the panel at the configured 3D resolution. Must run BEFORE
+// TrackedDeviceAdded: vrserver samples GetWindowBounds/GetEyeOutputViewport
+// exactly once, so they must already see the 3D-mode geometry.
+// No-op when eye tracking is disabled (panel stays 2D).
+//-----------------------------------------------------------------------------
+void PreparePanelBeforeDeviceAdd();
+
 // Display configuration, loaded from the "shiyan_nakedmonitor_display" settings section.
 struct NakedDisplayConfig
 {

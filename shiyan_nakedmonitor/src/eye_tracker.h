@@ -28,6 +28,18 @@ void SetDefaultScreenSize( float widthMeters, float heightMeters );
 // Idempotent + non-blocking: starts the vendor Register on a background thread.
 void Start();
 
+// Bounded blocking wait for the background Register (call after Start()).
+// true => Register finished successfully. Used before the first device add so
+// the panel can already be switched to 3D mode while the runtime still samples
+// its geometry.
+bool WaitForRegister( double timeoutSeconds );
+
+// Switch the panel to 3D (SBS) mode - the vendor tracker only delivers usable
+// eye positions while the panel is in 3D mode (the OpenXR runtime does the
+// same on XR session start). Applied immediately when registered; remembered
+// otherwise and applied by Pump() once Register finishes.
+void Enter3DMode();
+
 // Called every driver frame: settles the async registration, fetches the panel
 // size from the SDK once it is available, reads the tracker and advances the
 // fallback blending.

@@ -9,6 +9,11 @@ vr::EVRInitError NakedDeviceProvider::Init( vr::IVRDriverContext *pDriverContext
 	// Initialise the server driver context so we can call into the runtime.
 	VR_INIT_SERVER_DRIVER_CONTEXT( pDriverContext );
 
+	// Register the eye tracker and put the panel into 3D (SBS) mode BEFORE the
+	// HMD is added: vrserver samples window bounds / viewports exactly once at
+	// add time and they must already reflect the 3D-mode resolution.
+	PreparePanelBeforeDeviceAdd();
+
 	hmd_device_ = std::make_unique< NakedHMDDeviceDriver >();
 
 	if ( !vr::VRServerDriverHost()->TrackedDeviceAdded(
