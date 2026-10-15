@@ -64,3 +64,13 @@ foreach(OUTPUT_CONFIG DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     RUNTIME_OUTPUT_DIRECTORY_${OUTPUT_CONFIG} "${CMAKE_CURRENT_SOURCE_DIR}/bin/${ARCH_SUFFIX}"
     LIBRARY_OUTPUT_DIRECTORY_${OUTPUT_CONFIG} "${CMAKE_CURRENT_SOURCE_DIR}/bin/${ARCH_SUFFIX}")
 endforeach()
+
+# Eye-tracking SDK (BinocularCameraConfig.dll + its hv.dll dependency) must sit
+# next to the driver DLL so the loader (and LOAD_WITH_ALTERED_SEARCH_PATH for
+# hv.dll) finds them inside vrserver.
+add_custom_command(TARGET driver_shiyan_nakedmonitor POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_CURRENT_SOURCE_DIR}/libs/eye_tracking/BinocularCameraConfig.dll"
+    "${CMAKE_CURRENT_SOURCE_DIR}/libs/eye_tracking/hv.dll"
+    "$<TARGET_FILE_DIR:driver_shiyan_nakedmonitor>"
+  COMMENT "Copying eye-tracking SDK DLLs next to the driver")

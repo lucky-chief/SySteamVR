@@ -1,6 +1,7 @@
 //============ Shiyan Naked Monitor OpenVR driver ============
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -26,9 +27,16 @@ struct NakedDisplayConfig
 	// way to find it. Empty => fall back to resolution matching.
 	std::string monitor_name_substring;
 
-	float fov_horizontal_deg = 60.0f;
-	// <= 0 means "derive from horizontal fov + per-eye aspect ratio".
-	float fov_vertical_deg = 0.0f;
+	// --- Off-axis (general perspective) projection -------------------------
+	// The frustum is derived from the physical panel geometry and the current
+	// (tracked) eye positions, replacing the old symmetric horizontal/vertical
+	// FOV settings entirely:
+	//   screen_width_m / screen_height_m      - panel size (SDK overrides)
+	//   screen_center_height_m                - panel centre height above floor
+	//   screen_distance_m                     - nominal eye-to-panel distance;
+	//                                           locates the panel plane in the
+	//                                           tracking space
+	// float fov_horizontal_deg / fov_vertical_deg were removed accordingly.
 };
 
 //-----------------------------------------------------------------------------
@@ -71,9 +79,6 @@ private:
 
 	// Frames until the next window-placement check (~90 Hz RunFrame).
 	int placement_check_count_ = 0;
-
-	float half_tan_h_ = 1.0f;
-	float half_tan_v_ = 1.0f;
 };
 
 //-----------------------------------------------------------------------------
@@ -101,6 +106,13 @@ public:
 	// NakedDisplayComponent::EnforceWindowPlacement).
 	void EnforceWindowPlacement();
 
+	// Pushes the current (eye-tracked) eye-to-head transforms and off-axis
+	// projection to vrserver via IVRServerDriverHost::SetDisplayEyeToHead /
+	// SetDisplayProjectionRaw whenever the eye positions changed noticeably.
+	// The runtime only samples GetProjectionRaw once at startup, so live eye
+	// tracking needs these pushes to take effect.
+	void PushDisplayTransforms();
+
 private:
 	std::unique_ptr<NakedDisplayComponent> display_component_;
 
@@ -112,6 +124,24 @@ private:
 	float display_frequency_ = 60.0f;
 	float vsync_to_photons_ = 0.011f;
 	float seated_height_meters_ = 1.2f;
+
+	// --- Off-axis projection geometry (tracking space) ---------------------
+	// The panel centre sits at (0, screen_center_height_m_, -screen_distance_m_)
+	// with the viewer on the +z side; the eye tracker's screen-space coords are
+	// translated by exactly that to obtain tracking-space eye positions.
+	float screen_center_height_m_ = 1.2f;
+	float screen_distance_m_ = 0.5f;
+
+	// Change detection for PushDisplayTransforms (last pushed eye positions).
+	float last_pushed_eyes_[ 6 ] = {};
+	bool pushed_display_transforms_ = false;
+	std::chrono::steady_clock::time_point last_push_log_time_{};
+
+	// SetDisplayProjectionRaw HmdRect2 y-axis convention probe:
+	//   0 = don't push the projection (runtime keeps re-querying GetProjectionRaw)
+	//   1 = vTopLeft.y = +Y edge, vBottomRight.y = -Y edge (y-up, geometric)
+	//   2 = vTopLeft.y = -Y edge, vBottomRight.y = +Y edge (y-down, pixel/UV habit)
+	int projection_push_mode_ = 2;
 
 	// Prop_IsOnDesktop_Bool. Must stay false: setting it true makes vrmonitor
 	// raise the "headset display is not fullscreen" warning (SteamVR error -202).

@@ -2,6 +2,7 @@
 #include "naked_hmd_device_driver.h"
 
 #include "driverlog.h"
+#include "eye_tracker.h"
 
 #include <algorithm>
 #include <cctype>
@@ -20,7 +21,29 @@
 static const char *kMainSection = "driver_shiyan_nakedmonitor";
 static const char *kDisplaySection = "shiyan_nakedmonitor_display";
 
-static const float kPi = 3.14159265358979323846f;
+//-----------------------------------------------------------------------------
+// Off-axis (general perspective) projection.
+//-----------------------------------------------------------------------------
+// Screen-space convention (eye tracker + OpenXR runtime): origin at the panel
+// centre, +x right, +y up, +z toward the viewer; the panel plane is z = 0 and
+// eye[2] is this eye's distance to it. Every frustum plane passes through the
+// matching panel edge as seen from THAT eye, so each eye gets its own
+// asymmetric (off-axis) frustum and the panel becomes the zero-parallax plane.
+//
+// OpenVR naming is inverted (Driver_API_Documentation.md): pfTop is the tan of
+// the -Y (bottom) clipping plane, pfBottom the tan of the +Y (top) plane.
+static void ComputeOffAxisTangents( const float eye[ 3 ], float screenWidth, float screenHeight,
+	float *pfLeft, float *pfRight, float *pfTop, float *pfBottom )
+{
+	// GetCurrentEyes already clamps to >= 0.05 m; this is belt and braces so a
+	// zero/negative distance can never flip the frustum.
+	const float distance = ( eye[ 2 ] > 0.05f ) ? eye[ 2 ] : 0.05f;
+
+	*pfLeft = ( -screenWidth * 0.5f - eye[ 0 ] ) / distance;
+	*pfRight = ( screenWidth * 0.5f - eye[ 0 ] ) / distance;
+	*pfTop = ( -screenHeight * 0.5f - eye[ 1 ] ) / distance;  // -Y edge
+	*pfBottom = ( screenHeight * 0.5f - eye[ 1 ] ) / distance; // +Y edge
+}
 
 //-----------------------------------------------------------------------------
 // Helpers
@@ -52,12 +75,6 @@ static void GetStringOrDefault( const char *pchSection, const char *pchKey, cons
 	vr::EVRSettingsError error = vr::VRSettingsError_None;
 	vr::VRSettings()->GetString( pchSection, pchKey, buffer, sizeof( buffer ), &error );
 	out = ( error == vr::VRSettingsError_None ) ? buffer : pchDefault;
-}
-
-// Tangent of half of an angle given in degrees.
-static float HalfTanFromDegrees( float flDegrees )
-{
-	return std::tan( flDegrees * 0.5f * kPi / 180.0f );
 }
 
 //-----------------------------------------------------------------------------
@@ -302,24 +319,10 @@ NakedDisplayComponent::NakedDisplayComponent( const NakedDisplayConfig &config )
 		}
 	}
 
-	half_tan_h_ = HalfTanFromDegrees( config_.fov_horizontal_deg );
-
-	if ( config_.fov_vertical_deg > 0.0f )
-	{
-		half_tan_v_ = HalfTanFromDegrees( config_.fov_vertical_deg );
-	}
-	else
-	{
-		// Derive the vertical FOV from the horizontal FOV and the per-eye aspect
-		// ratio so the vertical scale is geometrically correct for a flat panel.
-		const float eye_width = static_cast< float >( resolved_window_width_ ) * 0.5f;
-		const float eye_height = static_cast< float >( resolved_window_height_ );
-		half_tan_v_ = half_tan_h_ * ( eye_height / eye_width );
-	}
-
-	const float vertical_fov_deg = 2.0f * std::atan( half_tan_v_ ) * 180.0f / kPi;
-	DriverLog( "shiyan_nakedmonitor: FOV horizontal=%.1f deg, vertical=%.1f deg.",
-		config_.fov_horizontal_deg, vertical_fov_deg );
+	// NOTE: the frustum is no longer configured here. GetProjectionRaw derives
+	// an off-axis (general perspective) frustum every call from the physical
+	// panel size and the current eye-tracker positions (see
+	// ComputeOffAxisTangents), so the old symmetric FOV settings are gone.
 }
 
 bool NakedDisplayComponent::IsDisplayOnDesktop()
@@ -377,13 +380,29 @@ void NakedDisplayComponent::GetEyeOutputViewport( vr::EVREye eEye, uint32_t *pnX
 
 void NakedDisplayComponent::GetProjectionRaw( vr::EVREye eEye, float *pfLeft, float *pfRight, float *pfTop, float *pfBottom )
 {
-	// Note: per the OpenVR docs, "top" is the tangent to the top (+Y) edge and
-	// "bottom" is the tangent to the bottom (-Y) edge. For a symmetric frustum
-	// the sign convention does not matter.
-	*pfLeft = -half_tan_h_;
-	*pfRight = half_tan_h_;
-	*pfTop = -half_tan_v_;
-	*pfBottom = half_tan_v_;
+	// Off-axis projection: build the frustum from the physical panel geometry
+	// and this frame's (eye-tracked) eye position. Ported from the OpenXR
+	// runtime's PopulateView(), with OpenVR's inverted top/bottom naming.
+	float eyeLeft[ 3 ] = {};
+	float eyeRight[ 3 ] = {};
+	EyeTracker::GetCurrentEyes( eyeLeft, eyeRight );
+	float screenWidth = 0.0f;
+	float screenHeight = 0.0f;
+	EyeTracker::GetScreenSize( &screenWidth, &screenHeight );
+
+	const float *eye = ( eEye == vr::Eye_Left ) ? eyeLeft : eyeRight;
+	ComputeOffAxisTangents( eye, screenWidth, screenHeight, pfLeft, pfRight, pfTop, pfBottom );
+
+	static bool sLogged[ 2 ] = { false, false };
+	const int eyeIndex = ( eEye == vr::Eye_Left ) ? 0 : 1;
+	if ( !sLogged[ eyeIndex ] )
+	{
+		sLogged[ eyeIndex ] = true;
+		DriverLog( "shiyan_nakedmonitor: GetProjectionRaw(%s) off-axis: eye=(%+.4f, %+.4f, %.4f) m, "
+				   "panel=%.4fx%.4f m -> left=%.4f right=%.4f top=%.4f bottom=%.4f",
+			eyeIndex == 0 ? "left" : "right", eye[ 0 ], eye[ 1 ], eye[ 2 ],
+			screenWidth, screenHeight, *pfLeft, *pfRight, *pfTop, *pfBottom );
+	}
 }
 
 vr::DistortionCoordinates_t NakedDisplayComponent::ComputeDistortion( vr::EVREye eEye, float fU, float fV )
@@ -551,8 +570,27 @@ NakedHMDDeviceDriver::NakedHMDDeviceDriver()
 	display_config.auto_place_window = GetBoolOrDefault( kDisplaySection, "auto_place_window", display_config.auto_place_window );
 	display_config.swap_eyes = GetBoolOrDefault( kDisplaySection, "swap_eyes", display_config.swap_eyes );
 	GetStringOrDefault( kDisplaySection, "monitor_name_substring", "", display_config.monitor_name_substring );
-	display_config.fov_horizontal_deg = GetFloatOrDefault( kDisplaySection, "fov_horizontal_deg", display_config.fov_horizontal_deg );
-	display_config.fov_vertical_deg = GetFloatOrDefault( kDisplaySection, "fov_vertical_deg", display_config.fov_vertical_deg );
+
+	// --- Off-axis projection geometry --------------------------------------
+	// Panel size seeds the tracker module; the SDK's GetScreenSize overrides it
+	// as a "hardware fact" once the background Register finishes.
+	const float screen_width_m = GetFloatOrDefault( kDisplaySection, "screen_width_m", 0.6981f );
+	const float screen_height_m = GetFloatOrDefault( kDisplaySection, "screen_height_m", 0.3927f );
+	screen_center_height_m_ = GetFloatOrDefault( kDisplaySection, "screen_center_height_m", screen_center_height_m_ );
+	screen_distance_m_ = GetFloatOrDefault( kDisplaySection, "screen_distance_m", screen_distance_m_ );
+	EyeTracker::SetDefaultScreenSize( screen_width_m, screen_height_m );
+
+	// Eye tracking drives the eye positions used by the off-axis frustum (and
+	// eye-to-head). When disabled, the default eye position [-32, 0, 500] /
+	// [32, 0, 500] mm still produces a correct off-axis frustum.
+	if ( GetBoolOrDefault( kDisplaySection, "eye_tracking", true ) )
+	{
+		EyeTracker::Start(); // non-blocking; Register runs on a background thread
+	}
+	else
+	{
+		DriverLog( "shiyan_nakedmonitor: eye tracking disabled by settings; using default eye positions." );
+	}
 
 	ipd_meters_ = GetFloatOrDefault( kDisplaySection, "ipd_meters", ipd_meters_ );
 	eye_depth_meters_ = GetFloatOrDefault( kDisplaySection, "eye_depth_meters", eye_depth_meters_ );
@@ -566,6 +604,7 @@ NakedHMDDeviceDriver::NakedHMDDeviceDriver()
 	universe_id_ = static_cast< uint64_t >( GetInt32OrDefault( kDisplaySection, "universe_id", static_cast< int32_t >( universe_id_ ) ) );
 	provide_chaperone_ = GetBoolOrDefault( kDisplaySection, "provide_chaperone", provide_chaperone_ );
 	play_area_meters_ = GetFloatOrDefault( kDisplaySection, "play_area_meters", play_area_meters_ );
+	projection_push_mode_ = GetInt32OrDefault( kDisplaySection, "projection_push_mode", projection_push_mode_ );
 
 	display_component_ = std::make_unique< NakedDisplayComponent >( display_config );
 
@@ -693,6 +732,112 @@ void NakedHMDDeviceDriver::EnforceWindowPlacement()
 	if ( display_component_ != nullptr )
 	{
 		display_component_->EnforceWindowPlacement();
+	}
+}
+
+void NakedHMDDeviceDriver::PushDisplayTransforms()
+{
+	if ( device_index_ == vr::k_unTrackedDeviceIndexInvalid )
+	{
+		return;
+	}
+
+	float eyeLeft[ 3 ] = {};
+	float eyeRight[ 3 ] = {};
+	EyeTracker::GetCurrentEyes( eyeLeft, eyeRight );
+
+	// Only push when the eyes moved noticeably (0.5 mm) - this IPC is meant for
+	// "the display changed", not for every single frame.
+	constexpr float kPushEpsilonMeters = 0.0005f;
+	bool changed = !pushed_display_transforms_;
+	for ( int i = 0; i < 3 && !changed; ++i )
+	{
+		changed = std::fabs( eyeLeft[ i ] - last_pushed_eyes_[ i ] ) > kPushEpsilonMeters
+			|| std::fabs( eyeRight[ i ] - last_pushed_eyes_[ 3 + i ] ) > kPushEpsilonMeters;
+	}
+	if ( !changed )
+	{
+		return;
+	}
+	pushed_display_transforms_ = true;
+	last_pushed_eyes_[ 0 ] = eyeLeft[ 0 ];
+	last_pushed_eyes_[ 1 ] = eyeLeft[ 1 ];
+	last_pushed_eyes_[ 2 ] = eyeLeft[ 2 ];
+	last_pushed_eyes_[ 3 ] = eyeRight[ 0 ];
+	last_pushed_eyes_[ 4 ] = eyeRight[ 1 ];
+	last_pushed_eyes_[ 5 ] = eyeRight[ 2 ];
+
+	// --- Eye-to-head ------------------------------------------------------
+	// Tracking space = screen-space coordinates translated to the panel centre
+	// at (0, screen_center_height_m_, -screen_distance_m_); the head pose is
+	// static at (0, seated_height_meters_, 0), so eyeToHead is the difference.
+	auto fillEyeToHead = [this]( vr::HmdMatrix34_t &matrix, const float eye[ 3 ] ) {
+		matrix = {};
+		matrix.m[ 0 ][ 0 ] = 1.0f;
+		matrix.m[ 1 ][ 1 ] = 1.0f;
+		matrix.m[ 2 ][ 2 ] = 1.0f;
+		matrix.m[ 0 ][ 3 ] = eye[ 0 ];
+		matrix.m[ 1 ][ 3 ] = eye[ 1 ] + screen_center_height_m_ - seated_height_meters_;
+		matrix.m[ 2 ][ 3 ] = eye[ 2 ] - screen_distance_m_;
+	};
+	vr::HmdMatrix34_t eyeToHeadLeft = {};
+	vr::HmdMatrix34_t eyeToHeadRight = {};
+	fillEyeToHead( eyeToHeadLeft, eyeLeft );
+	fillEyeToHead( eyeToHeadRight, eyeRight );
+	vr::VRServerDriverHost()->SetDisplayEyeToHead( device_index_, eyeToHeadLeft, eyeToHeadRight );
+
+	// --- Off-axis projection ----------------------------------------------
+	// Same tangents as GetProjectionRaw, packaged as per-eye rects. The y-axis
+	// convention of SetDisplayProjectionRaw is undocumented; projection_push_mode
+	// selects it so the correct one can be confirmed empirically (see header).
+	// mode 0 => skip the projection push entirely.
+	float screenWidth = 0.0f;
+	float screenHeight = 0.0f;
+	EyeTracker::GetScreenSize( &screenWidth, &screenHeight );
+
+	if ( projection_push_mode_ != 0 )
+	{
+		const int yMode = projection_push_mode_;
+		auto fillProjection = [screenWidth, screenHeight, yMode]( const float eye[ 3 ], vr::HmdRect2_t &rect ) {
+			float left = 0.0f;
+			float right = 0.0f;
+			float top = 0.0f;    // -Y edge (OpenVR's inverted naming)
+			float bottom = 0.0f; // +Y edge
+			ComputeOffAxisTangents( eye, screenWidth, screenHeight, &left, &right, &top, &bottom );
+			rect.vTopLeft.v[ 0 ] = left;
+			rect.vBottomRight.v[ 0 ] = right;
+			if ( yMode == 1 )
+			{
+				// y-up: vTopLeft is the upper-left corner (+Y edge on top).
+				rect.vTopLeft.v[ 1 ] = bottom;
+				rect.vBottomRight.v[ 1 ] = top;
+			}
+			else
+			{
+				// y-down: vTopLeft carries the numerically smaller ("upper") value.
+				rect.vTopLeft.v[ 1 ] = top;
+				rect.vBottomRight.v[ 1 ] = bottom;
+			}
+		};
+		vr::HmdRect2_t projectionLeft = {};
+		vr::HmdRect2_t projectionRight = {};
+		fillProjection( eyeLeft, projectionLeft );
+		fillProjection( eyeRight, projectionRight );
+		vr::VRServerDriverHost()->SetDisplayProjectionRaw( device_index_, projectionLeft, projectionRight );
+	}
+
+	// Rate-limit the log: eye tracking makes this fire often while the user
+	// moves; keep the first push plus one line per second.
+	const auto now = std::chrono::steady_clock::now();
+	if ( last_push_log_time_.time_since_epoch().count() == 0
+		 || now - last_push_log_time_ >= std::chrono::seconds( 1 ) )
+	{
+		last_push_log_time_ = now;
+		DriverLog( "shiyan_nakedmonitor: pushed display transforms: eyeL=(%+.4f, %+.4f, %.4f) "
+				   "eyeR=(%+.4f, %+.4f, %.4f) panel=%.4fx%.4f (projection push mode %d)",
+			eyeLeft[ 0 ], eyeLeft[ 1 ], eyeLeft[ 2 ],
+			eyeRight[ 0 ], eyeRight[ 1 ], eyeRight[ 2 ],
+			screenWidth, screenHeight, projection_push_mode_ );
 	}
 }
 

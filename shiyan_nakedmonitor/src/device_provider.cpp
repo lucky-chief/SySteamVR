@@ -2,6 +2,7 @@
 #include "device_provider.h"
 
 #include "driverlog.h"
+#include "eye_tracker.h"
 
 vr::EVRInitError NakedDeviceProvider::Init( vr::IVRDriverContext *pDriverContext )
 {
@@ -33,10 +34,17 @@ bool NakedDeviceProvider::ShouldBlockStandbyMode()
 
 void NakedDeviceProvider::RunFrame()
 {
+	// Advance the eye tracker: settles the background Register, applies the
+	// SDK panel size, reads eye positions and eases the fallback blend.
+	EyeTracker::Pump();
+
 	if ( hmd_device_ != nullptr )
 	{
 		// Publish our (static) pose. Cheap, and keeps the device in the "ready" state.
 		hmd_device_->UpdatePose();
+
+		// Keep the off-axis frustum + eye-to-head in sync with the tracked eyes.
+		hmd_device_->PushDisplayTransforms();
 
 		// Keep the compositor output window on the 3D panel.
 		hmd_device_->EnforceWindowPlacement();
@@ -60,4 +68,8 @@ void NakedDeviceProvider::LeaveStandby()
 void NakedDeviceProvider::Cleanup()
 {
 	hmd_device_ = nullptr;
+
+	// Unregister the eye-tracking SDK (leaves an in-flight background Register
+	// alone, see EyeTracker::Shutdown).
+	EyeTracker::Shutdown();
 }
