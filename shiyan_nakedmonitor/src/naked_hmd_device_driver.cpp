@@ -3,6 +3,7 @@
 
 #include "driverlog.h"
 #include "eye_tracker.h"
+#include "virtual_head.h"
 
 #include <algorithm>
 #include <cctype>
@@ -755,12 +756,32 @@ vr::DriverPose_t NakedHMDDeviceDriver::GetPose()
 	// These must be valid quaternions or the device will not appear.
 	pose.qWorldFromDriverRotation.w = 1.0;
 	pose.qDriverFromHeadRotation.w = 1.0;
-	pose.qRotation.w = 1.0;
 
-	// Fixed viewer position (metres). x=right, y=up, z=back.
-	pose.vecPosition[ 0 ] = 0.0;
-	pose.vecPosition[ 1 ] = seated_height_meters_;
-	pose.vecPosition[ 2 ] = 0.0;
+	// Virtual head (MMB look + WASD walk, see virtual_head.h): base position
+	// at the seated height, offset by the walk, rotated by yaw/pitch.
+	// Tracking space: -Z forward, +Y up, positive yaw = turn left.
+	float yaw = 0.0f;
+	float pitch = 0.0f;
+	VirtualHead::GetYawPitch( &yaw, &pitch );
+	const float halfYaw = yaw * 0.5f;
+	const float halfPitch = pitch * 0.5f;
+	const float cy = std::cos( halfYaw );
+	const float sy = std::sin( halfYaw );
+	const float cp = std::cos( halfPitch );
+	const float sp = std::sin( halfPitch );
+	// Ry(yaw) * Rx(pitch): w = cy*cp, x = cy*sp, y = cp*sy, z = -sy*sp.
+	pose.qRotation.w = cy * cp;
+	pose.qRotation.x = cy * sp;
+	pose.qRotation.y = cp * sy;
+	pose.qRotation.z = -sy * sp;
+
+	float walkOffset[ 3 ] = {};
+	VirtualHead::GetPositionOffset( walkOffset );
+
+	// Viewer position (metres). x=right, y=up, z=back.
+	pose.vecPosition[ 0 ] = walkOffset[ 0 ];
+	pose.vecPosition[ 1 ] = seated_height_meters_ + walkOffset[ 1 ];
+	pose.vecPosition[ 2 ] = walkOffset[ 2 ];
 
 	pose.poseIsValid = true;
 	pose.deviceIsConnected = true;

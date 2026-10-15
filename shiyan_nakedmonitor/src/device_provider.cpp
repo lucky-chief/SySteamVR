@@ -4,6 +4,7 @@
 #include "driverlog.h"
 #include "eye_tracker.h"
 #include "raw_input.h"
+#include "virtual_head.h"
 
 static bool GetBoolSetting( const char *pchSection, const char *pchKey, bool bDefault )
 {
@@ -75,9 +76,15 @@ void NakedDeviceProvider::RunFrame()
 	// SDK panel size, reads eye positions and eases the fallback blend.
 	EyeTracker::Pump();
 
+	// Keyboard/mouse snapshot. VirtualHead consumes what belongs to the head
+	// (G toggle, MMB look, WASD walk) and zeroes the mouse deltas it took, so
+	// the controller only sees what is still unconsumed.
+	RawInput::State input = RawInput::Consume();
+	VirtualHead::Update( input );
+
 	if ( hmd_device_ != nullptr )
 	{
-		// Publish our (static) pose. Cheap, and keeps the device in the "ready" state.
+		// Publish the (virtual-head-modulated) pose.
 		hmd_device_->UpdatePose();
 
 		// Keep the off-axis frustum + eye-to-head in sync with the tracked eyes.
@@ -87,10 +94,10 @@ void NakedDeviceProvider::RunFrame()
 		hmd_device_->EnforceWindowPlacement();
 	}
 
-	// --- Virtual controller: feed the latest keyboard/mouse snapshot --------
+	// --- Virtual controller: feed the remaining keyboard/mouse snapshot -----
 	if ( controller_ != nullptr )
 	{
-		controller_->RunFrame( RawInput::Consume() );
+		controller_->RunFrame( input );
 	}
 
 	// Drain the event queue (haptics go to the controller) so it does not back up.

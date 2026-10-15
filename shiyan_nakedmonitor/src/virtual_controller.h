@@ -63,21 +63,26 @@ private:
 	std::string serial_number_;
 	std::string model_number_;
 
-	// Aim orientation accumulated from mouse deltas (radians).
+	// --- vr_sim fallback aim: mouse deltas steer yaw/pitch (radians).
+	// Used when interaction_mode == vr_sim, or when the mouse ray is
+	// unavailable (no headset window / cursor) in natural_mouse mode.
 	float aim_yaw_ = 0.0f;
 	float aim_pitch_ = 0.0f;
 
-	// Mouse-wheel analog trigger value (0..1), folded into the trigger.
-	float wheel_trigger_ = 0.0f;
+	// Mouse-wheel pulse that emulates pushing the thumbstick forward/back
+	// (wheel = joystick y for pulse_seconds, refreshed by each notch).
+	float wheel_pulse_seconds_ = 0.0f;
+	float wheel_pulse_sign_ = 1.0f;
+	bool wheel_invert_ = false;
 
 	// Controller position = eye midpoint + this offset, in tracking space
-	// (x right, y up, z back - the user's example: 0.1 right, 0.2 down,
-	// 0.1 back).
+	// (x right, y up, z back). vr_sim fallback pose only; natural_mouse
+	// derives both position and orientation from the pointer ray.
 	float offset_x_ = 0.1f;
 	float offset_y_ = -0.2f;
 	float offset_z_ = 0.1f;
 
-	// Radians of aim per mouse pixel.
+	// Radians of aim per mouse pixel (vr_sim fallback aim).
 	float mouse_sensitivity_ = 0.0025f;
 
 	// Panel geometry (screen-space -> tracking-space), same settings keys the
@@ -89,6 +94,9 @@ private:
 
 	uint32_t device_index_ = vr::k_unTrackedDeviceIndexInvalid;
 	bool active_ = false;
+
+	// Frame delta for the wheel pulse decay.
+	std::chrono::steady_clock::time_point last_runframe_time_{};
 
 	std::chrono::steady_clock::time_point last_haptic_log_{};
 };
