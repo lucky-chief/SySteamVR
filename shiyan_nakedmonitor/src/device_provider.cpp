@@ -37,6 +37,9 @@ void NakedDeviceProvider::RunFrame()
 	{
 		// Publish our (static) pose. Cheap, and keeps the device in the "ready" state.
 		hmd_device_->UpdatePose();
+
+		// Keep the compositor output window on the 3D panel.
+		hmd_device_->EnforceWindowPlacement();
 	}
 
 	// Drain the event queue so it does not back up.

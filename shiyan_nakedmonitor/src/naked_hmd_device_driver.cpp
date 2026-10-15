@@ -3,8 +3,11 @@
 
 #include "driverlog.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -119,6 +122,42 @@ BOOL CALLBACK EnumMonitorProc( HMONITOR hMonitor, HDC, LPRECT, LPARAM lParam )
 	}
 	return TRUE;
 }
+
+struct MonitorMatch
+{
+	bool found = false;
+	int32_t x = 0;
+	int32_t y = 0;
+	int32_t width = 0;
+	int32_t height = 0;
+	std::string name;
+};
+
+static std::string ToLowerCopy( const std::string &value )
+{
+	std::string lowered = value;
+	std::transform( lowered.begin(), lowered.end(), lowered.begin(),
+		[]( unsigned char c ) { return static_cast<char>( std::tolower( c ) ); } );
+	return lowered;
+}
+
+// monitorFriendlyDeviceName is WCHAR[]; narrow it for logging/comparison.
+static std::string WideToUtf8( const wchar_t *value )
+{
+	if ( value == nullptr || value[ 0 ] == L'\0' )
+	{
+		return std::string();
+	}
+	const int bytes = WideCharToMultiByte( CP_UTF8, 0, value, -1, nullptr, 0, nullptr, nullptr );
+	if ( bytes <= 1 )
+	{
+		return std::string();
+	}
+	std::string out( static_cast< size_t >( bytes ), '\0' );
+	WideCharToMultiByte( CP_UTF8, 0, value, -1, &out[ 0 ], bytes, nullptr, nullptr );
+	out.resize( static_cast< size_t >( bytes - 1 ) ); // drop the terminator
+	return out;
+}
 } // namespace
 
 static bool FindMonitorByResolution( int width, int height, int32_t *pOutX, int32_t *pOutY )
@@ -131,6 +170,73 @@ static bool FindMonitorByResolution( int width, int height, int32_t *pOutX, int3
 		*pOutY = search.y;
 	}
 	return search.found;
+}
+
+//-----------------------------------------------------------------------------
+// Find a monitor by its EDID friendly name (e.g. "SYS_A_1E320H").
+// QueryDisplayConfig reports physical desktop coordinates regardless of the
+// process DPI-awareness, so the returned position is always usable as-is.
+//-----------------------------------------------------------------------------
+static bool FindMonitorByName( const std::string &nameSubstring, MonitorMatch *pOutMatch )
+{
+	if ( nameSubstring.empty() )
+	{
+		return false;
+	}
+
+	UINT32 unPathCount = 0;
+	UINT32 unModeCount = 0;
+	if ( GetDisplayConfigBufferSizes( QDC_ONLY_ACTIVE_PATHS, &unPathCount, &unModeCount ) != ERROR_SUCCESS )
+	{
+		return false;
+	}
+
+	std::vector<DISPLAYCONFIG_PATH_INFO> paths( unPathCount );
+	std::vector<DISPLAYCONFIG_MODE_INFO> modes( unModeCount );
+	if ( QueryDisplayConfig( QDC_ONLY_ACTIVE_PATHS, &unPathCount, paths.data(), &unModeCount, modes.data(), nullptr ) != ERROR_SUCCESS )
+	{
+		return false;
+	}
+
+	const std::string needle = ToLowerCopy( nameSubstring );
+	for ( UINT32 i = 0; i < unPathCount; ++i )
+	{
+		DISPLAYCONFIG_TARGET_DEVICE_NAME targetName = {};
+		targetName.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+		targetName.header.size = sizeof( targetName );
+		targetName.header.adapterId = paths[ i ].targetInfo.adapterId;
+		targetName.header.id = paths[ i ].targetInfo.id;
+		if ( DisplayConfigGetDeviceInfo( &targetName.header ) != ERROR_SUCCESS )
+		{
+			continue;
+		}
+
+		const std::string friendly = WideToUtf8( targetName.monitorFriendlyDeviceName );
+		if ( ToLowerCopy( friendly ).find( needle ) == std::string::npos )
+		{
+			continue;
+		}
+
+		const UINT32 unModeIdx = paths[ i ].sourceInfo.modeInfoIdx;
+		if ( unModeIdx == DISPLAYCONFIG_PATH_MODE_IDX_INVALID || unModeIdx >= unModeCount )
+		{
+			continue;
+		}
+		const DISPLAYCONFIG_MODE_INFO &mode = modes[ unModeIdx ];
+		if ( mode.infoType != DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE )
+		{
+			continue;
+		}
+
+		pOutMatch->found = true;
+		pOutMatch->x = mode.sourceMode.position.x;
+		pOutMatch->y = mode.sourceMode.position.y;
+		pOutMatch->width = static_cast<int32_t>( mode.sourceMode.width );
+		pOutMatch->height = static_cast<int32_t>( mode.sourceMode.height );
+		pOutMatch->name = friendly;
+		return true; // first matching target wins
+	}
+	return false;
 }
 #else
 static bool FindMonitorByResolution( int, int, int32_t *, int32_t * )
@@ -147,22 +253,52 @@ NakedDisplayComponent::NakedDisplayComponent( const NakedDisplayConfig &config )
 {
 	resolved_window_x_ = config_.window_x;
 	resolved_window_y_ = config_.window_y;
+	resolved_window_width_ = config_.window_width;
+	resolved_window_height_ = config_.window_height;
 
 	if ( config_.auto_place_window )
 	{
-		int32_t monitor_x = 0;
-		int32_t monitor_y = 0;
-		if ( FindMonitorByResolution( config_.window_width, config_.window_height, &monitor_x, &monitor_y ) )
+		// Make EnumDisplayMonitors return physical coordinates even when the
+		// host process (vrserver) is DPI-unaware. No-op if already aware.
+		SetProcessDPIAware();
+
+		// 1) Preferred: match the panel by its monitor name. The panel changes
+		//    resolution between 2D and 3D modes, so the name is the reliable
+		//    identifier; the window is then sized to the current mode.
+		MonitorMatch match;
+		if ( FindMonitorByName( config_.monitor_name_substring, &match ) )
 		{
-			resolved_window_x_ = monitor_x;
-			resolved_window_y_ = monitor_y;
-			DriverLog( "shiyan_nakedmonitor: auto-placed window on monitor at (%d, %d) for %dx%d.",
-				resolved_window_x_, resolved_window_y_, config_.window_width, config_.window_height );
+			resolved_window_x_ = match.x;
+			resolved_window_y_ = match.y;
+			resolved_window_width_ = match.width;
+			resolved_window_height_ = match.height;
+			DriverLog( "shiyan_nakedmonitor: auto-placed window on monitor '%s' at (%d, %d), size %dx%d (matched by name).",
+				match.name.c_str(), resolved_window_x_, resolved_window_y_,
+				resolved_window_width_, resolved_window_height_ );
 		}
 		else
 		{
-			DriverLog( "shiyan_nakedmonitor: no monitor matched %dx%d; falling back to configured position (%d, %d).",
-				config_.window_width, config_.window_height, config_.window_x, config_.window_y );
+			// 2) Fallback: exact resolution match.
+			if ( !config_.monitor_name_substring.empty() )
+			{
+				DriverLog( "shiyan_nakedmonitor: no active monitor matched name '%s'; trying resolution %dx%d.",
+					config_.monitor_name_substring.c_str(), config_.window_width, config_.window_height );
+			}
+
+			int32_t monitor_x = 0;
+			int32_t monitor_y = 0;
+			if ( FindMonitorByResolution( config_.window_width, config_.window_height, &monitor_x, &monitor_y ) )
+			{
+				resolved_window_x_ = monitor_x;
+				resolved_window_y_ = monitor_y;
+				DriverLog( "shiyan_nakedmonitor: auto-placed window on monitor at (%d, %d) for %dx%d.",
+					resolved_window_x_, resolved_window_y_, config_.window_width, config_.window_height );
+			}
+			else
+			{
+				DriverLog( "shiyan_nakedmonitor: no monitor matched %dx%d; falling back to configured position (%d, %d).",
+					config_.window_width, config_.window_height, config_.window_x, config_.window_y );
+			}
 		}
 	}
 
@@ -176,8 +312,8 @@ NakedDisplayComponent::NakedDisplayComponent( const NakedDisplayConfig &config )
 	{
 		// Derive the vertical FOV from the horizontal FOV and the per-eye aspect
 		// ratio so the vertical scale is geometrically correct for a flat panel.
-		const float eye_width = static_cast< float >( config_.window_width ) * 0.5f;
-		const float eye_height = static_cast< float >( config_.window_height );
+		const float eye_width = static_cast< float >( resolved_window_width_ ) * 0.5f;
+		const float eye_height = static_cast< float >( resolved_window_height_ );
 		half_tan_v_ = half_tan_h_ * ( eye_height / eye_width );
 	}
 
@@ -208,11 +344,11 @@ void NakedDisplayComponent::GetRecommendedRenderTargetSize( uint32_t *pnWidth, u
 
 void NakedDisplayComponent::GetEyeOutputViewport( vr::EVREye eEye, uint32_t *pnX, uint32_t *pnY, uint32_t *pnWidth, uint32_t *pnHeight )
 {
-	const uint32_t half_width = static_cast< uint32_t >( config_.window_width ) / 2;
+	const uint32_t half_width = static_cast< uint32_t >( resolved_window_width_ ) / 2;
 
 	*pnY = 0;
 	*pnWidth = half_width;
-	*pnHeight = static_cast< uint32_t >( config_.window_height );
+	*pnHeight = static_cast< uint32_t >( resolved_window_height_ );
 
 	bool is_left = ( eEye == vr::Eye_Left );
 	if ( config_.swap_eyes )
@@ -253,14 +389,126 @@ void NakedDisplayComponent::GetWindowBounds( int32_t *pnX, int32_t *pnY, uint32_
 {
 	*pnX = resolved_window_x_;
 	*pnY = resolved_window_y_;
-	*pnWidth = static_cast< uint32_t >( config_.window_width );
-	*pnHeight = static_cast< uint32_t >( config_.window_height );
+	*pnWidth = static_cast< uint32_t >( resolved_window_width_ );
+	*pnHeight = static_cast< uint32_t >( resolved_window_height_ );
 }
 
 bool NakedDisplayComponent::ComputeInverseDistortion( vr::HmdVector2_t *pResult, vr::EVREye eEye, uint32_t unChannel, float fU, float fV )
 {
 	// Let SteamVR infer an estimate from ComputeDistortion (which is identity here).
 	return false;
+}
+
+//-----------------------------------------------------------------------------
+// Window placement watchdog
+//-----------------------------------------------------------------------------
+// SteamVR creates the compositor's "Headset Window" itself and has been
+// observed to leave it parked at (32767, 32767) - outside every monitor -
+// while the vrmonitor mirror keeps rendering normally, so the picture
+// silently never reaches the panel. Re-assert our resolved bounds whenever
+// they differ.
+#ifdef _WIN32
+static bool IsProcessNamed( DWORD unPid, const wchar_t *pchExeName )
+{
+	HANDLE hProcess = OpenProcess( PROCESS_QUERY_LIMITED_INFORMATION, FALSE, unPid );
+	if ( hProcess == nullptr )
+	{
+		return false;
+	}
+
+	wchar_t path[ MAX_PATH ] = {};
+	DWORD unSize = MAX_PATH;
+	const BOOL ok = QueryFullProcessImageNameW( hProcess, 0, path, &unSize );
+	CloseHandle( hProcess );
+	if ( !ok )
+	{
+		return false;
+	}
+
+	const wchar_t *pchBase = path;
+	for ( const wchar_t *p = path; *p != L'\0'; ++p )
+	{
+		if ( *p == L'\\' || *p == L'/' )
+		{
+			pchBase = p + 1;
+		}
+	}
+	return _wcsicmp( pchBase, pchExeName ) == 0;
+}
+
+// Locate the compositor output window. The title is not localized.
+static HWND FindCompositorHeadsetWindow()
+{
+	HWND window = FindWindowW( nullptr, L"Headset Window" );
+	if ( window == nullptr )
+	{
+		return nullptr;
+	}
+
+	DWORD unPid = 0;
+	GetWindowThreadProcessId( window, &unPid );
+	if ( unPid == 0 || !IsProcessNamed( unPid, L"vrcompositor.exe" ) )
+	{
+		return nullptr;
+	}
+	return window;
+}
+#endif
+
+void NakedDisplayComponent::EnforceWindowPlacement()
+{
+#ifdef _WIN32
+	if ( !config_.auto_place_window )
+	{
+		return;
+	}
+
+	// RunFrame runs at the display rate; check a few times per second.
+	if ( ++placement_check_count_ < 30 )
+	{
+		return;
+	}
+	placement_check_count_ = 0;
+
+	// Window coordinates must be physical pixels; switch this thread to
+	// Per-Monitor V2 DPI awareness for the duration of the check.
+	typedef HANDLE ( WINAPI *PFN_SetThreadDpiAwarenessContext )( HANDLE );
+	auto setContext = reinterpret_cast< PFN_SetThreadDpiAwarenessContext >(
+		GetProcAddress( GetModuleHandleW( L"user32.dll" ), "SetThreadDpiAwarenessContext" ) );
+	HANDLE previousContext = nullptr;
+	if ( setContext != nullptr )
+	{
+		previousContext = setContext( reinterpret_cast< HANDLE >( static_cast< INT_PTR >( -4 ) ) ); // PER_MONITOR_AWARE_V2
+	}
+
+	HWND window = FindCompositorHeadsetWindow();
+	if ( window != nullptr )
+	{
+		RECT rect = {};
+		if ( GetWindowRect( window, &rect ) )
+		{
+			const LONG expectedRight = static_cast< LONG >( resolved_window_x_ + resolved_window_width_ );
+			const LONG expectedBottom = static_cast< LONG >( resolved_window_y_ + resolved_window_height_ );
+			if ( rect.left != resolved_window_x_ || rect.top != resolved_window_y_ ||
+				 rect.right != expectedRight || rect.bottom != expectedBottom )
+			{
+				// SWP_ASYNCWINDOWPOS: post instead of send, so a compositor
+				// thread that is currently waiting on vrserver cannot deadlock.
+				SetWindowPos( window, nullptr, resolved_window_x_, resolved_window_y_,
+					resolved_window_width_, resolved_window_height_,
+					SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS );
+				DriverLog( "shiyan_nakedmonitor: moved misplaced 'Headset Window' from (%ld, %ld)-(%ld, %ld) to (%d, %d) %dx%d.",
+					rect.left, rect.top, rect.right, rect.bottom,
+					resolved_window_x_, resolved_window_y_, resolved_window_width_, resolved_window_height_ );
+			}
+		}
+	}
+
+	if ( setContext != nullptr && previousContext != nullptr )
+	{
+		setContext( previousContext );
+	}
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -280,6 +528,7 @@ NakedHMDDeviceDriver::NakedHMDDeviceDriver()
 	display_config.render_height = GetInt32OrDefault( kDisplaySection, "render_height", display_config.render_height );
 	display_config.auto_place_window = GetBoolOrDefault( kDisplaySection, "auto_place_window", display_config.auto_place_window );
 	display_config.swap_eyes = GetBoolOrDefault( kDisplaySection, "swap_eyes", display_config.swap_eyes );
+	GetStringOrDefault( kDisplaySection, "monitor_name_substring", "", display_config.monitor_name_substring );
 	display_config.fov_horizontal_deg = GetFloatOrDefault( kDisplaySection, "fov_horizontal_deg", display_config.fov_horizontal_deg );
 	display_config.fov_vertical_deg = GetFloatOrDefault( kDisplaySection, "fov_vertical_deg", display_config.fov_vertical_deg );
 
@@ -415,6 +664,14 @@ void NakedHMDDeviceDriver::UpdatePose()
 	}
 
 	vr::VRServerDriverHost()->TrackedDevicePoseUpdated( device_index_, GetPose(), sizeof( vr::DriverPose_t ) );
+}
+
+void NakedHMDDeviceDriver::EnforceWindowPlacement()
+{
+	if ( display_component_ != nullptr )
+	{
+		display_component_->EnforceWindowPlacement();
+	}
 }
 
 void NakedHMDDeviceDriver::EnterStandby()

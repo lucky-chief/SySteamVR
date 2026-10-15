@@ -20,6 +20,12 @@ struct NakedDisplayConfig
 	bool auto_place_window = true;
 	bool swap_eyes = false;
 
+	// Match the panel by its EDID monitor name (case-insensitive substring)
+	// instead of by resolution. The 3D panel changes resolution between 2D
+	// (3840x2160) and 3D (7680x2160) modes, so the name is the only reliable
+	// way to find it. Empty => fall back to resolution matching.
+	std::string monitor_name_substring;
+
 	float fov_horizontal_deg = 60.0f;
 	// <= 0 means "derive from horizontal fov + per-eye aspect ratio".
 	float fov_vertical_deg = 0.0f;
@@ -45,11 +51,26 @@ public:
 	void GetWindowBounds( int32_t *pnX, int32_t *pnY, uint32_t *pnWidth, uint32_t *pnHeight ) override;
 	bool ComputeInverseDistortion( vr::HmdVector2_t *pResult, vr::EVREye eEye, uint32_t unChannel, float fU, float fV ) override;
 
+	// Periodically verify that the compositor's "Headset Window" actually sits
+	// at our resolved bounds and move it back if not. SteamVR has been observed
+	// to park that window at (32767, 32767) - far outside the virtual desktop -
+	// while the vrmonitor mirror keeps rendering normally, so the view silently
+	// never reaches the panel. Called from the provider's RunFrame().
+	void EnforceWindowPlacement();
+
 private:
 	NakedDisplayConfig config_;
 
 	int32_t resolved_window_x_ = 0;
 	int32_t resolved_window_y_ = 0;
+	// Window size actually used. Starts at the configured size and is
+	// replaced by the matched monitor's current resolution so the window
+	// always fills the panel, whatever resolution the panel is in.
+	int32_t resolved_window_width_ = 0;
+	int32_t resolved_window_height_ = 0;
+
+	// Frames until the next window-placement check (~90 Hz RunFrame).
+	int placement_check_count_ = 0;
 
 	float half_tan_h_ = 1.0f;
 	float half_tan_v_ = 1.0f;
@@ -75,6 +96,10 @@ public:
 
 	// Called by our IServerTrackedDeviceProvider every frame.
 	void UpdatePose();
+
+	// Keeps the compositor output window on the panel (see
+	// NakedDisplayComponent::EnforceWindowPlacement).
+	void EnforceWindowPlacement();
 
 private:
 	std::unique_ptr<NakedDisplayComponent> display_component_;

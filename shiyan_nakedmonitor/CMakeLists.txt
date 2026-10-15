@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.7.1)
 project(shiyan_nakedmonitor CXX)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # The OpenVR SDK is expected next to this folder. Override with -DOPENVR_ROOT=...

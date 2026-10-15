@@ -1,3 +1,0 @@
-U:/Projects/C++/SteamVR/shiyan_nakedmonitor/build/CMakeFiles/driver_shiyan_nakedmonitor.dir
-U:/Projects/C++/SteamVR/shiyan_nakedmonitor/build/CMakeFiles/ALL_BUILD.dir
-U:/Projects/C++/SteamVR/shiyan_nakedmonitor/build/CMakeFiles/ZERO_CHECK.dir

@@ -8,6 +8,7 @@
 	},
 	"shiyan_nakedmonitor_display": {
 		"auto_place_window": true,
+		"monitor_name_substring": "SYS_A_1E320H",
 		"window_x": 0,
 		"window_y": 0,
 		"window_width": 7680,
