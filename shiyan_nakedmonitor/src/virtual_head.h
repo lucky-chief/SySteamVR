@@ -37,6 +37,8 @@ void Update( RawInput::State &input );
 // --- HMD pose ---------------------------------------------------------------
 // Yaw around +Y (positive = turn left), pitch around +X (positive = up).
 void GetYawPitch( float *outYaw, float *outPitch );
+// Head orientation quaternion (x, y, z, w) = Ry(yaw) * Rx(pitch).
+void GetOrientation( float outQuat[ 4 ] );
 // Walk offset in tracking space (metres), applied on top of the seated base.
 void GetPositionOffset( float out[ 3 ] );
 

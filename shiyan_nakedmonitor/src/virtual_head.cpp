@@ -2,6 +2,7 @@
 #include "virtual_head.h"
 
 #include "driverlog.h"
+#include "quat_utils.h"
 
 #include <algorithm>
 #include <chrono>
@@ -128,10 +129,18 @@ void Init()
 	g_head.move_speed = GetFloatSetting( kHeadSection, "head_move_speed_mps", g_head.move_speed );
 	g_head.cursor_recenter = GetBoolSetting( kHeadSection, "cursor_recenter", g_head.cursor_recenter );
 
-	DriverLog( "shiyan_nakedmonitor: virtual head (mode %s; look %.5f rad/px, walk %.2f m/s, recenter %s).",
+	// Initial head orientation (degrees). Useful for aiming presets and for
+	// verifying the aim ray's head-pose composition without touching the mouse.
+	const float yawDeg = GetFloatSetting( kHeadSection, "head_yaw_deg", 0.0f );
+	const float pitchDeg = GetFloatSetting( kHeadSection, "head_pitch_deg", 0.0f );
+	g_head.yaw = yawDeg * 0.0174532925f;
+	g_head.pitch = pitchDeg * 0.0174532925f;
+
+	DriverLog( "shiyan_nakedmonitor: virtual head (mode %s; look %.5f rad/px, walk %.2f m/s, recenter %s, initial yaw %+.1f pitch %+.1f deg).",
 		g_head.natural_mouse ? "natural_mouse" : "vr_sim",
 		g_head.look_sensitivity, g_head.move_speed,
-		g_head.cursor_recenter ? "on" : "off" );
+		g_head.cursor_recenter ? "on" : "off",
+		yawDeg, pitchDeg );
 }
 
 void Update( RawInput::State &input )
@@ -240,6 +249,14 @@ void GetYawPitch( float *outYaw, float *outPitch )
 	if ( outPitch != nullptr )
 	{
 		*outPitch = g_head.pitch;
+	}
+}
+
+void GetOrientation( float outQuat[ 4 ] )
+{
+	if ( outQuat != nullptr )
+	{
+		Quat::FromYawPitch( g_head.yaw, g_head.pitch, outQuat );
 	}
 }
 

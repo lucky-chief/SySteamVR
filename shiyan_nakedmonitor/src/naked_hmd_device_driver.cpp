@@ -3,6 +3,7 @@
 
 #include "driverlog.h"
 #include "eye_tracker.h"
+#include "quat_utils.h"
 #include "virtual_head.h"
 
 #include <algorithm>
@@ -801,31 +802,43 @@ vr::DriverPose_t NakedHMDDeviceDriver::GetPose()
 	pose.qWorldFromDriverRotation.w = 1.0;
 	pose.qDriverFromHeadRotation.w = 1.0;
 
-	// Virtual head (MMB look + WASD walk, see virtual_head.h): base position
-	// at the seated height, offset by the walk, rotated by yaw/pitch.
-	// Tracking space: -Z forward, +Y up, positive yaw = turn left.
-	float yaw = 0.0f;
-	float pitch = 0.0f;
-	VirtualHead::GetYawPitch( &yaw, &pitch );
-	const float halfYaw = yaw * 0.5f;
-	const float halfPitch = pitch * 0.5f;
-	const float cy = std::cos( halfYaw );
-	const float sy = std::sin( halfYaw );
-	const float cp = std::cos( halfPitch );
-	const float sp = std::sin( halfPitch );
-	// Ry(yaw) * Rx(pitch): w = cy*cp, x = cy*sp, y = cp*sy, z = -sy*sp.
-	pose.qRotation.w = cy * cp;
-	pose.qRotation.x = cy * sp;
-	pose.qRotation.y = cp * sy;
-	pose.qRotation.z = -sy * sp;
+	// Virtual head (MMB look + WASD walk, see virtual_head.h).
+	float headQuat[ 4 ] = { 0.0f, 0.0f, 0.0f, 1.0f };
+	VirtualHead::GetOrientation( headQuat );
+	pose.qRotation.x = headQuat[ 0 ];
+	pose.qRotation.y = headQuat[ 1 ];
+	pose.qRotation.z = headQuat[ 2 ];
+	pose.qRotation.w = headQuat[ 3 ];
 
 	float walkOffset[ 3 ] = {};
 	VirtualHead::GetPositionOffset( walkOffset );
 
-	// Viewer position (metres). x=right, y=up, z=back.
-	pose.vecPosition[ 0 ] = walkOffset[ 0 ];
-	pose.vecPosition[ 1 ] = seated_height_meters_ + walkOffset[ 1 ];
-	pose.vecPosition[ 2 ] = walkOffset[ 2 ];
+	// --- Rotation pivot: the tracked eye midpoint -------------------------
+	// The compositor places each virtual eye at  headPose * eyeToHead, and
+	// eyeToHead (pushed in PushDisplayTransforms) is the eye's offset from the
+	// seated base. Rotating the head would therefore swing the eyes around
+	// that base by ~0.8 m, so the pose translation is counter-shifted by
+	// (I - R) * eyeToHeadMid: the eyes then stay exactly at their physical
+	// tracking position for any head orientation, i.e. the view rotates about
+	// the eyes. At R = I this is identical to the old fixed seated pose.
+	const float base[ 3 ] = { 0.0f, seated_height_meters_, 0.0f };
+	float eyeLeft[ 3 ] = {};
+	float eyeRight[ 3 ] = {};
+	EyeTracker::GetCurrentEyes( eyeLeft, eyeRight );
+	const float eyeMidTracking[ 3 ] = {
+		( eyeLeft[ 0 ] + eyeRight[ 0 ] ) * 0.5f,
+		( eyeLeft[ 1 ] + eyeRight[ 1 ] ) * 0.5f + screen_center_height_m_,
+		( eyeLeft[ 2 ] + eyeRight[ 2 ] ) * 0.5f - screen_distance_m_ };
+
+	const float eyeToHeadMid[ 3 ] = { eyeMidTracking[ 0 ] - base[ 0 ],
+									  eyeMidTracking[ 1 ] - base[ 1 ],
+									  eyeMidTracking[ 2 ] - base[ 2 ] };
+	float rotated[ 3 ] = {};
+	Quat::RotateVector( headQuat, eyeToHeadMid, rotated );
+
+	pose.vecPosition[ 0 ] = eyeMidTracking[ 0 ] + walkOffset[ 0 ] - rotated[ 0 ];
+	pose.vecPosition[ 1 ] = eyeMidTracking[ 1 ] + walkOffset[ 1 ] - rotated[ 1 ];
+	pose.vecPosition[ 2 ] = eyeMidTracking[ 2 ] + walkOffset[ 2 ] - rotated[ 2 ];
 
 	pose.poseIsValid = true;
 	pose.deviceIsConnected = true;

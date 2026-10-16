@@ -432,6 +432,10 @@ constexpr float kFallbackRightEye[ 3 ] = { 0.032f, 0.0f, 0.5f };
 // Minimum eye-to-panel distance so a silly z never flips the frustum.
 constexpr float kMinEyeDistanceZ = 0.05f;
 
+// Plausibility floor for a TRACKED reading (metres): the vendor sometimes
+// returns a valid state with a zero eye distance, which is unusable.
+constexpr float kMinPlausibleEyeZ = 0.15f;
+
 // Fallback easing time constant: only applies on tracking-failure -> default
 // eye position; tracking-follows-directly otherwise.
 constexpr float kBlendTimeConstantSeconds = 1.0f;
@@ -614,7 +618,8 @@ void Pump()
 	// Gate: only TRACKED frames use live eye positions; anything else eases
 	// back to the default eye position (port of XrEyetracking::getEyePos).
 	const int state = BcGetTrackedState();
-	const bool valid = ( state == 0 /* EYE_TRACK_TRACKED */ );
+	bool valid = ( state == 0 /* EYE_TRACK_TRACKED */ );
+	bool implausible = false;
 
 	float targetL[ 3 ] = { kFallbackLeftEye[ 0 ], kFallbackLeftEye[ 1 ], kFallbackLeftEye[ 2 ] };
 	float targetR[ 3 ] = { kFallbackRightEye[ 0 ], kFallbackRightEye[ 1 ], kFallbackRightEye[ 2 ] };
@@ -627,6 +632,18 @@ void Pump()
 		targetR[ 0 ] = pos.rCamx * 0.001f;
 		targetR[ 1 ] = pos.rCamy * 0.001f;
 		targetR[ 2 ] = pos.rCamz * 0.001f;
+
+		// The vendor occasionally reports TRACKED with a zero (or absurd) eye
+		// distance. Accepting that collapses the eyes onto the panel plane:
+		// the off-axis frustum blows up and the natural_mouse aim ray becomes
+		// degenerate (it is bounded by the panel seen from the eye). Treat it
+		// as a dropout and ease to the fallback instead.
+		const bool finite = std::isfinite( targetL[ 2 ] ) && std::isfinite( targetR[ 2 ] );
+		if ( !finite || targetL[ 2 ] < kMinPlausibleEyeZ || targetR[ 2 ] < kMinPlausibleEyeZ )
+		{
+			valid = false;
+			implausible = true;
+		}
 	}
 
 	const auto now = std::chrono::steady_clock::now();
@@ -669,6 +686,12 @@ void Pump()
 		{
 			DriverLog( "shiyan_nakedmonitor: eye tracking ACTIVE (eyeL=(%+.1f, %+.1f, %.0f) mm)",
 				targetL[ 0 ] * 1000.0f, targetL[ 1 ] * 1000.0f, targetL[ 2 ] * 1000.0f );
+		}
+		else if ( implausible )
+		{
+			DriverLog( "shiyan_nakedmonitor: eye tracking data invalid (TRACKED but z=(%.0f, %.0f) mm); "
+					   "easing to default eye positions",
+				targetL[ 2 ] * 1000.0f, targetR[ 2 ] * 1000.0f );
 		}
 		else
 		{

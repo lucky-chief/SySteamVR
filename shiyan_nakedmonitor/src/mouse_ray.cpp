@@ -3,9 +3,11 @@
 
 #include "driverlog.h"
 #include "eye_tracker.h"
+#include "quat_utils.h"
 #include "virtual_head.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <string>
 
@@ -74,11 +76,27 @@ struct RayState
 	float forward_offset = 0.15f;
 	float up_offset = 0.0f;
 
+	// Angular sweep gain: the cursor always maps onto a plane parallel to the
+	// physical panel at (0, screen_center_height, -screen_distance), but a
+	// scale > 1 makes that virtual aiming plane larger than the panel. The
+	// ray's angular sweep is bounded by the panel silhouette seen from the
+	// eye (about +/-21 deg horizontal at 0.9 m with the default panel), so
+	// values > 1 are the way to reach beyond what is visible on the panel.
+	float span_scale = 1.0f;
+
 	// Panel geometry (screen space -> tracking space).
 	float screen_width_m = 0.6981f;
 	float screen_height_m = 0.3927f;
 	float screen_center_height_m = 1.2f;
 	float screen_distance_m = 0.5f;
+
+	// Diagnostics: raw cursor + source area as seen by THIS process (the
+	// driver runs DPI-aware, so it may differ from other apps' coordinates).
+	int last_cursor_x = 0;
+	int last_cursor_y = 0;
+	int last_area_w = 0;
+	int last_area_h = 0;
+	bool debug_log = false; // ray_debug_log: log the aim angles (tuning aid)
 };
 
 RayState g_ray;
@@ -157,6 +175,10 @@ bool NormalizeCursorToPanel( float *outU, float *outV )
 		}
 		*outU = std::max( 0.0f, std::min( static_cast< float >( cursor.x ) / static_cast< float >( width ), 1.0f ) );
 		*outV = std::max( 0.0f, std::min( static_cast< float >( cursor.y ) / static_cast< float >( height ), 1.0f ) );
+		g_ray.last_cursor_x = cursor.x;
+		g_ray.last_cursor_y = cursor.y;
+		g_ray.last_area_w = width;
+		g_ray.last_area_h = height;
 		return true;
 	}
 
@@ -185,6 +207,10 @@ bool NormalizeCursorToPanel( float *outU, float *outV )
 
 	float x = std::max( 0.0f, std::min( static_cast< float >( cursor.x ), width - 1.0f ) );
 	const float y = std::max( 0.0f, std::min( static_cast< float >( cursor.y ), height - 1.0f ) );
+	g_ray.last_cursor_x = cursor.x;
+	g_ray.last_cursor_y = cursor.y;
+	g_ray.last_area_w = static_cast< int >( width );
+	g_ray.last_area_h = static_cast< int >( height );
 
 	switch ( g_ray.mapping )
 	{
@@ -248,14 +274,27 @@ void Init()
 
 	g_ray.forward_offset = GetFloatSetting( kRaySection, "ray_origin_forward_m", g_ray.forward_offset );
 	g_ray.up_offset = GetFloatSetting( kRaySection, "ray_origin_up_m", g_ray.up_offset );
+	g_ray.span_scale = GetFloatSetting( kRaySection, "ray_span_scale", g_ray.span_scale );
+	if ( g_ray.span_scale < 0.1f )
+	{
+		g_ray.span_scale = 0.1f;
+	}
+	{
+		vr::EVRSettingsError error = vr::VRSettingsError_None;
+		g_ray.debug_log = vr::VRSettings()->GetBool( kRaySection, "ray_debug_log", &error );
+		if ( error != vr::VRSettingsError_None )
+		{
+			g_ray.debug_log = false;
+		}
+	}
 
 	g_ray.screen_width_m = GetFloatSetting( kDisplaySectionForRay, "screen_width_m", g_ray.screen_width_m );
 	g_ray.screen_height_m = GetFloatSetting( kDisplaySectionForRay, "screen_height_m", g_ray.screen_height_m );
 	g_ray.screen_center_height_m = GetFloatSetting( kDisplaySectionForRay, "screen_center_height_m", g_ray.screen_center_height_m );
 	g_ray.screen_distance_m = GetFloatSetting( kDisplaySectionForRay, "screen_distance_m", g_ray.screen_distance_m );
 
-	DriverLog( "shiyan_nakedmonitor: mouse ray (source %s, mapping %s; origin offset %.2f m forward, %.2f m up).",
-		source.c_str(), mapping.c_str(), g_ray.forward_offset, g_ray.up_offset );
+	DriverLog( "shiyan_nakedmonitor: mouse ray (source %s, mapping %s; span x%.2f, origin offset %.2f m forward, %.2f m up).",
+		source.c_str(), mapping.c_str(), g_ray.span_scale, g_ray.forward_offset, g_ray.up_offset );
 }
 
 bool ComputeAimPose( float outPosition[ 3 ], float outOrientation[ 4 ] )
@@ -274,51 +313,107 @@ bool ComputeAimPose( float outPosition[ 3 ], float outOrientation[ 4 ] )
 
 	// Panel hit point in tracking space (panel centre at
 	// (0, screen_center_height, -screen_distance), +z toward the viewer).
+	// span_scale grows the aiming plane beyond the physical panel, widening
+	// the reachable angular range (1.0 = exact physical panel).
 	const float target[ 3 ] = {
-		( u - 0.5f ) * g_ray.screen_width_m,
-		( 0.5f - v ) * g_ray.screen_height_m + g_ray.screen_center_height_m,
+		( u - 0.5f ) * g_ray.screen_width_m * g_ray.span_scale,
+		( 0.5f - v ) * g_ray.screen_height_m * g_ray.span_scale + g_ray.screen_center_height_m,
 		-g_ray.screen_distance_m };
 
-	// Centre eye in tracking space (screen-space eye midpoint translated by
-	// the panel geometry, plus the virtual head's walk offset).
+	// Physical centre eye in tracking space (screen-space eye midpoint
+	// translated by the panel geometry) and the virtual head pose.
 	float eyeLeft[ 3 ] = {};
 	float eyeRight[ 3 ] = {};
 	EyeTracker::GetCurrentEyes( eyeLeft, eyeRight );
 	float walkOffset[ 3 ] = {};
 	VirtualHead::GetPositionOffset( walkOffset );
+	float headQuat[ 4 ] = { 0.0f, 0.0f, 0.0f, 1.0f };
+	VirtualHead::GetOrientation( headQuat );
+
 	const float eyeMid[ 3 ] = {
 		( eyeLeft[ 0 ] + eyeRight[ 0 ] ) * 0.5f,
-		( eyeLeft[ 1 ] + eyeRight[ 1 ] ) * 0.5f + g_ray.screen_center_height_m + walkOffset[ 1 ],
-		( eyeLeft[ 2 ] + eyeRight[ 2 ] ) * 0.5f - g_ray.screen_distance_m + walkOffset[ 2 ] };
-	// Note: walkOffset.x folds into the eye midpoint x as well.
-	const float originBase[ 3 ] = { eyeMid[ 0 ] + walkOffset[ 0 ], eyeMid[ 1 ], eyeMid[ 2 ] };
+		( eyeLeft[ 1 ] + eyeRight[ 1 ] ) * 0.5f + g_ray.screen_center_height_m,
+		( eyeLeft[ 2 ] + eyeRight[ 2 ] ) * 0.5f - g_ray.screen_distance_m };
 
-	float dirToTarget[ 3 ] = { target[ 0 ] - originBase[ 0 ],
-							   target[ 1 ] - originBase[ 1 ],
-							   target[ 2 ] - originBase[ 2 ] };
-	const float distance = std::sqrt( dirToTarget[ 0 ] * dirToTarget[ 0 ]
-									  + dirToTarget[ 1 ] * dirToTarget[ 1 ]
-									  + dirToTarget[ 2 ] * dirToTarget[ 2 ] );
+	// --- Ray in the HEAD frame, then composed with the head pose -----------
+	// Port of the reference runtime ("ComposePose(headPose, localPose)"): the
+	// panel point is expressed relative to the eye, the offsets are applied in
+	// that same frame (so "15 cm in front of the eyes" stays in front of the
+	// face), and the result is rotated by the head orientation. Turning the
+	// head with MMB therefore swings the aim through the whole scene instead
+	// of pinning it to the physical panel.
+	const float localTarget[ 3 ] = { target[ 0 ] - eyeMid[ 0 ],
+									 target[ 1 ] - eyeMid[ 1 ],
+									 target[ 2 ] - eyeMid[ 2 ] };
+	const float distance = std::sqrt( localTarget[ 0 ] * localTarget[ 0 ]
+									  + localTarget[ 1 ] * localTarget[ 1 ]
+									  + localTarget[ 2 ] * localTarget[ 2 ] );
 
-	// Origin offsets: forward along the ray (never past the hit point) and up
-	// along tracking +Y. Direction is recomputed towards the hit below, so the
-	// ray still lands exactly on the cursor's target.
-	float origin[ 3 ] = { originBase[ 0 ], originBase[ 1 ], originBase[ 2 ] };
-	float forward = g_ray.forward_offset;
+	float localOrigin[ 3 ] = { 0.0f, 0.0f, 0.0f };
 	if ( distance > 1e-6f )
 	{
+		float forward = g_ray.forward_offset;
 		if ( forward > 0.0f )
 		{
 			forward = std::min( forward, distance * 0.95f );
 		}
 		const float scale = forward / distance;
-		origin[ 0 ] += dirToTarget[ 0 ] * scale;
-		origin[ 1 ] += dirToTarget[ 1 ] * scale;
-		origin[ 2 ] += dirToTarget[ 2 ] * scale;
+		localOrigin[ 0 ] = localTarget[ 0 ] * scale;
+		localOrigin[ 1 ] = localTarget[ 1 ] * scale;
+		localOrigin[ 2 ] = localTarget[ 2 ] * scale;
 	}
-	origin[ 1 ] += g_ray.up_offset;
+	localOrigin[ 1 ] += g_ray.up_offset;
 
-	const float dir[ 3 ] = { target[ 0 ] - origin[ 0 ], target[ 1 ] - origin[ 1 ], target[ 2 ] - origin[ 2 ] };
+	const float localDir[ 3 ] = { localTarget[ 0 ] - localOrigin[ 0 ],
+								  localTarget[ 1 ] - localOrigin[ 1 ],
+								  localTarget[ 2 ] - localOrigin[ 2 ] };
+
+	float dir[ 3 ] = {};
+	float rotatedOrigin[ 3 ] = {};
+	Quat::RotateVector( headQuat, localDir, dir );
+	Quat::RotateVector( headQuat, localOrigin, rotatedOrigin );
+
+	const float origin[ 3 ] = { eyeMid[ 0 ] + walkOffset[ 0 ] + rotatedOrigin[ 0 ],
+								eyeMid[ 1 ] + walkOffset[ 1 ] + rotatedOrigin[ 1 ],
+								eyeMid[ 2 ] + walkOffset[ 2 ] + rotatedOrigin[ 2 ] };
+
+	// Head orientation (for the diagnostics below).
+	float headYaw = 0.0f;
+	float headPitch = 0.0f;
+	VirtualHead::GetYawPitch( &headYaw, &headPitch );
+
+	// Diagnostic (rate-limited): the reachable aim range is bounded by the
+	// aiming plane seen from the eye; log the angles so the sweep can be
+	// measured/tuned without a visual check.
+	if ( g_ray.debug_log )
+	{
+		const float len = std::sqrt( dir[ 0 ] * dir[ 0 ] + dir[ 1 ] * dir[ 1 ] + dir[ 2 ] * dir[ 2 ] );
+		if ( len > 1e-6f )
+		{
+			const float yawDeg = std::atan2( -dir[ 0 ], -dir[ 2 ] ) * 57.29578f;
+			const float pitchDeg = std::asin( dir[ 1 ] / len ) * 57.29578f;
+			static std::chrono::steady_clock::time_point lastLog{};
+			static float lastYaw = 0.0f;
+			static float lastPitch = 0.0f;
+			static bool loggedOnce = false;
+			const auto now = std::chrono::steady_clock::now();
+			if ( !loggedOnce
+				 || ( now - lastLog >= std::chrono::milliseconds( 250 )
+					  && ( std::fabs( yawDeg - lastYaw ) > 0.25f || std::fabs( pitchDeg - lastPitch ) > 0.25f ) ) )
+			{
+				loggedOnce = true;
+				lastLog = now;
+				lastYaw = yawDeg;
+				lastPitch = pitchDeg;
+				DriverLog( "shiyan_nakedmonitor: aim ray (u=%.3f v=%.3f span x%.2f; cursor %d,%d of %dx%d; head yaw %+.1f pitch %+.1f) -> yaw %+.1f deg, pitch %+.1f deg",
+					u, v, g_ray.span_scale,
+					g_ray.last_cursor_x, g_ray.last_cursor_y, g_ray.last_area_w, g_ray.last_area_h,
+					headYaw * 57.29578f, headPitch * 57.29578f,
+					yawDeg, pitchDeg );
+			}
+		}
+	}
+
 	QuatFromForward( dir, outOrientation );
 	outPosition[ 0 ] = origin[ 0 ];
 	outPosition[ 1 ] = origin[ 1 ];
