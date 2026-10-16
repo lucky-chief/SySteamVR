@@ -153,6 +153,21 @@ void QuatFromForward( const float dir[ 3 ], float outQuat[ 4 ] )
 	outQuat[ 3 ] = std::cos( halfAngle );
 }
 
+// Presentation window lookup. In indirect mode SteamVR's compositor creates
+// the "Headset Window"; in direct mode our own component creates a window
+// (class ShiyanNakedMonitorOutput). Without this the window-relative cursor
+// source would silently fall back to the vr_sim aim.
+HWND FindPresentationWindow()
+{
+	// Direct mode window first: its class is ours and unambiguous.
+	HWND window = FindWindowW( L"ShiyanNakedMonitorOutput", nullptr );
+	if ( window != nullptr )
+	{
+		return window;
+	}
+	return FindWindowW( nullptr, L"Headset Window" );
+}
+
 // Cursor -> panel normalized coordinates (u right, v down). Clamped to the
 // chosen source area; mapping selected by the cursor_mapping setting.
 bool NormalizeCursorToPanel( float *outU, float *outV )
@@ -182,8 +197,8 @@ bool NormalizeCursorToPanel( float *outU, float *outV )
 		return true;
 	}
 
-	// --- Window source: cursor inside the compositor Headset Window --------
-	HWND window = FindWindowW( nullptr, L"Headset Window" );
+	// --- Window source: cursor inside the presentation window --------------
+	HWND window = FindPresentationWindow();
 	if ( window == nullptr )
 	{
 		return false;

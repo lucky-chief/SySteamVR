@@ -28,6 +28,11 @@
 		"ray_debug_log": false,
 		"wheel_invert": false
 	},
+	"shiyan_nakedmonitor_ime": {
+		"enabled": true,
+		"processes": "vrcompositor,vrmonitor,vrdashboard,vrwebhelper,vrserver,steamwebhelper,steamtours",
+		"keyboard_layout": "00000409"
+	},
 	"shiyan_nakedmonitor_display": {
 		"auto_place_window": true,
 		"monitor_name_substring": "SYS_A_1E320H",

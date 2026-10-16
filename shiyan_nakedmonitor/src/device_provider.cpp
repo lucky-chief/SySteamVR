@@ -3,6 +3,7 @@
 
 #include "driverlog.h"
 #include "eye_tracker.h"
+#include "ime_switch.h"
 #include "raw_input.h"
 #include "virtual_head.h"
 
@@ -81,6 +82,10 @@ void NakedDeviceProvider::RunFrame()
 	// the controller only sees what is still unconsumed.
 	RawInput::State input = RawInput::Consume();
 	VirtualHead::Update( input );
+
+	// Keep the VR windows on the English keyboard layout so typing in VR does
+	// not produce Chinese IME text (see ime_switch.h). Internally throttled.
+	ImeSwitch::Update();
 
 	if ( hmd_device_ != nullptr )
 	{
