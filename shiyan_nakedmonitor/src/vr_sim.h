@@ -68,14 +68,15 @@ struct GamepadInput
 	float trigger = 0.0f; // LT
 	float grip = 0.0f;    // RT
 	bool facePrimary = false;
-	bool faceSecondary = false;
-	bool menu = false;
-	bool reset = false;     // Back: same as Z
-	bool toggleMode = false; // Start: same as G
-	bool sprint = false;     // LB: same as Shift
-	bool thumbstickClick = false;
-	float thumbX = 0.0f; // d-pad
-	float thumbY = 0.0f;
+	bool buttonB = false;      // raw B: tap = face secondary, hold = 3x speed
+	bool menu = false;         // Start
+	bool modeToggle = false;   // L3: vr_sim <-> natural_mouse
+	bool reset = false;        // R3: reset the controllers (vr_sim)
+	bool lookModifier = false; // LB: right stick rotates the "other" thing
+	bool moveModifier = false; // RB: left stick moves vertically
+	bool prevTarget = false;   // d-pad left: previous target
+	bool nextTarget = false;   // d-pad right: next target
+	float thumbY = 0.0f;       // d-pad up/down -> thumbstick Y
 };
 
 // Installed by the provider once per frame before Update().

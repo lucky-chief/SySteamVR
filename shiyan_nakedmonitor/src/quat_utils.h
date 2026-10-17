@@ -26,9 +26,19 @@ inline void FromYawPitch( float yaw, float pitch, float outQuat[ 4 ] )
 	outQuat[ 3 ] = cy * cp;  // w
 }
 
-// v' = q * v * q^-1 (via the t = 2*(q_vec x v) form).
-inline void RotateVector( const float q[ 4 ], const float v[ 3 ], float out[ 3 ] )
+// out = a * b (Hamilton product, all quaternions are (x, y, z, w)).
+inline void Multiply( const float a[ 4 ], const float b[ 4 ], float out[ 4 ] )
 {
+	const float ax = a[ 0 ], ay = a[ 1 ], az = a[ 2 ], aw = a[ 3 ];
+	const float bx = b[ 0 ], by = b[ 1 ], bz = b[ 2 ], bw = b[ 3 ];
+	out[ 0 ] = aw * bx + ax * bw + ay * bz - az * by;
+	out[ 1 ] = aw * by - ax * bz + ay * bw + az * bx;
+	out[ 2 ] = aw * bz + ax * by - ay * bx + az * bw;
+	out[ 3 ] = aw * bw - ax * bx - ay * by - az * bz;
+}
+
+// v' = q * v * q^-1 (via the t = 2*(q_vec x v) form).
+inline void RotateVector( const float q[ 4 ], const float v[ 3 ], float out[ 3 ] ){
 	const float x = q[ 0 ];
 	const float y = q[ 1 ];
 	const float z = q[ 2 ];

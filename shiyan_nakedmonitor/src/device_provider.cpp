@@ -129,16 +129,17 @@ void NakedDeviceProvider::RunFrame()
 	sim_pad.moveY = pad.leftY;
 	sim_pad.lookX = pad.rightX;
 	sim_pad.lookY = pad.rightY;
-	sim_pad.trigger = pad.leftTrigger;   // LT
-	sim_pad.grip = pad.rightTrigger;     // RT
+	sim_pad.trigger = pad.rightTrigger;  // RT
+	sim_pad.grip = pad.leftTrigger;      // LT
 	sim_pad.facePrimary = pad.a;
-	sim_pad.faceSecondary = pad.b;
-	sim_pad.menu = pad.x;
-	sim_pad.reset = pad.back;
-	sim_pad.toggleMode = pad.start;
-	sim_pad.sprint = pad.shoulderLeft;
-	sim_pad.thumbstickClick = pad.shoulderRight || pad.rightStickClick;
-	sim_pad.thumbX = ( pad.dpadRight ? 1.0f : 0.0f ) - ( pad.dpadLeft ? 1.0f : 0.0f );
+	sim_pad.buttonB = pad.b;
+	sim_pad.menu = pad.start;
+	sim_pad.modeToggle = pad.leftStickClick;
+	sim_pad.reset = pad.rightStickClick;
+	sim_pad.lookModifier = pad.shoulderLeft; // LB
+	sim_pad.moveModifier = pad.shoulderRight; // RB
+	sim_pad.prevTarget = pad.dpadLeft;
+	sim_pad.nextTarget = pad.dpadRight;
 	sim_pad.thumbY = ( pad.dpadUp ? 1.0f : 0.0f ) - ( pad.dpadDown ? 1.0f : 0.0f );
 	VrSim::SetGamepad( sim_pad );
 

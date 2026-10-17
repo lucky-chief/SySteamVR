@@ -253,23 +253,23 @@ deliberate:
   SteamVR Home actions (menu / teleport / turn), so most buttons do nothing in
   Home and in games.
 
-| Gamepad | Action |
-|---|---|
-| Left stick | Move the active target (`WASD`) |
-| Right stick | Turn the active target (head or hand) |
-| `LT` / `RT` | Trigger / grip (active hand, analog) |
-| `A` / `B` | Face primary / secondary |
-| `X` | Application menu |
-| `Y` | Show/hide the key-hint overlay (`V`) |
-| `Back` | Reset both hands (`Z`) |
-| `Start` | Toggle `vr_sim` <-> `natural_mouse` (`G`) |
-| `LB` | Move 3x faster (`Shift`) |
-| `RB` | Thumbstick click (`R`) |
-| D-pad | Thumbstick |
-| Rumble | `VREvent_Input_HapticVibration` -> `XInputSetState` |
+| Gamepad | `natural_mouse` | `vr_sim` |
+|---|---|---|
+| Left stick | Move the head | Move the active target |
+| Right stick | Turn the view | Turn the active target |
+| `LB` + right stick | Turn the primary hand | Turn the view |
+| `RB` + left stick | Head up/down | Active target up/down |
+| `RT` / `LT` | Trigger / grip (active hand, analog) | same |
+| `A` / `B` | `A` = face primary; tap `B` = face secondary, hold `B` = 3x move/turn speed (>0.3 s) | same |
+| `Y` | Show/hide the key-hint overlay (`V`) | same |
+| `Start` | Application menu | same |
+| D-pad left/right | - | Cycle target: head -> left -> right |
+| D-pad up/down | Thumbstick Y | same |
+| `L3` (left stick click) | Toggle `vr_sim` <-> `natural_mouse` | same |
+| `R3` (right stick click) | - | Reset both hands (`Z`) |
+| Rumble | `VREvent_Input_HapticVibration` -> `XInputSetState` | same |
 
-Target switching stays on the keyboard (`Tab` / `1` / `2` / `3`); the pad has
-no target-switch buttons.
+Keyboard target switching (`Tab` / `1` / `2` / `3`) still works.
 
 Setup:
 
