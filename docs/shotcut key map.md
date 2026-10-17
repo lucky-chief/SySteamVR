@@ -14,7 +14,7 @@
 | `V` | 显示 / 隐藏按键提示图 |
 | `A` / `D` 或 `←` / `→` | **仅在提示图可见时**：上一页 / 下一页（循环）；此时这几个键不参与移动/摇杆 |
 | `H` | 显示 / 隐藏系统鼠标指针（只作用于 direct mode 的输出窗口） |
-| `G` | 切换交互模式：vr_sim ⇄ natural_mouse |
+| `G` | 切换交互模式：vr_sim ⇄ natural_mouse（切换时双手自动重置到头部朝向） |
 
 ---
 
@@ -94,7 +94,7 @@
 |---|---|---|
 | 左摇杆 | 移动**头** | 移动**激活对象** |
 | 右摇杆 | 转动**视野** | 转动**激活对象** |
-| `LB` + 右摇杆 | 转动**主手** | 转动**视野** |
+| `LB` + 右摇杆 | 移动指针（双手跟随射线） | 转动**视野** |
 | `RB` + 左摇杆 | **头**上下 | **激活对象**上下 |
 | `RT` / `LT` | 扳机 / 握持（激活手，模拟量） | 同左（激活对象） |
 | `A` / `B` | `A` 面板主键；轻按 `B` = 面板副键，按住 `B` > 0.3s = 移动/转动 ×3 | 同左 |
@@ -109,7 +109,8 @@
 设置（`shiyan_nakedmonitor_gamepad`）：`enabled`、`slot`（-1 = 第一个连接的手柄）、
 `deadzone`、`rumble`、`rumble_gain`；摇杆转向速度在
 `shiyan_nakedmonitor_controller`：`sim_stick_look_yaw` / `sim_stick_look_pitch`
-（度/秒，默认 130 / 80）。
+（度/秒，默认 130 / 80）、`sim_stick_pointer_speed`（natural_mouse 指针速度，
+屏幕宽/秒，默认 0.55）。
 
 > 使用前需关闭 SteamVR 的 **Steam Input**，并在 `steamvr.vrsettings` 里设置
 > `"driver_gamepad": { "enable": false }`（否则内置 gamepad 驱动也会读取手柄）。

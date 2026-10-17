@@ -32,7 +32,8 @@
 		"ray_debug_log": false,
 		"wheel_invert": false,
 		"sim_stick_look_yaw": 130.0,
-		"sim_stick_look_pitch": 80.0
+		"sim_stick_look_pitch": 80.0,
+		"sim_stick_pointer_speed": 0.55
 	},
 	"shiyan_nakedmonitor_gamepad": {
 		"enabled": true,

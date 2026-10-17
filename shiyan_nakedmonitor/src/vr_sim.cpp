@@ -81,10 +81,12 @@ struct SimState
 	float hand_pos[ 2 ][ 3 ] = { { -kHandResetHalfSpacing, -0.25f, -0.35f },
 		{ kHandResetHalfSpacing, -0.25f, -0.35f } };
 
-	// natural_mouse only: extra aim offset on top of the mouse ray
-	// (gamepad LB + right stick rotates the primary hand).
-	float hand_ray_yaw[ 2 ] = { 0.0f, 0.0f };
-	float hand_ray_pitch[ 2 ] = { 0.0f, 0.0f };
+	// natural_mouse: LB + right stick moves the OS pointer, exactly like the
+	// mouse; the hand aim follows the eye -> cursor ray. The fractional part
+	// is carried between frames so slow stick deflections still move.
+	float stick_pointer_speed = 0.55f; // screen widths per second
+	float pointer_accum_x = 0.0f;
+	float pointer_accum_y = 0.0f;
 
 	VrSim::HandInput hand_input[ 2 ];
 
@@ -156,6 +158,34 @@ float WrapPi( float angle )
 		angle += 2.0f * 3.14159265f;
 	}
 	return angle;
+}
+
+// Place both hands in front of the head with the head's orientation (Z / R3),
+// and drop any natural_mouse ray offset. Also used when the interaction mode
+// changes, so the hands start aligned with the head.
+void ResetHands()
+{
+	float headQuat[ 4 ] = {};
+	Quat::FromYawPitch( g_sim.head_yaw, g_sim.head_pitch, headQuat );
+	const float forwardIn[ 3 ] = { 0.0f, 0.0f, -1.0f };
+	const float rightIn[ 3 ] = { 1.0f, 0.0f, 0.0f };
+	float forward[ 3 ] = {};
+	float right[ 3 ] = {};
+	Quat::RotateVector( headQuat, forwardIn, forward );
+	Quat::RotateVector( headQuat, rightIn, right );
+
+	const float headY = g_sim.head_offset[ 1 ];
+	const float resetDistance = g_sim.hand_reset_distance;
+	const float resetHeight = g_sim.hand_reset_height_offset;
+	for ( int hand = 0; hand < 2; ++hand )
+	{
+		const float side = ( hand == 0 ) ? -kHandResetHalfSpacing : kHandResetHalfSpacing;
+		g_sim.hand_pos[ hand ][ 0 ] = g_sim.head_offset[ 0 ] + forward[ 0 ] * resetDistance + right[ 0 ] * side;
+		g_sim.hand_pos[ hand ][ 1 ] = headY + forward[ 1 ] * resetDistance + right[ 1 ] * side + resetHeight;
+		g_sim.hand_pos[ hand ][ 2 ] = g_sim.head_offset[ 2 ] + forward[ 2 ] * resetDistance + right[ 2 ] * side;
+		g_sim.hand_yaw[ hand ] = g_sim.head_yaw;
+		g_sim.hand_pitch[ hand ] = g_sim.head_pitch;
+	}
 }
 
 void RecenterCursorIfNearEdge()
@@ -251,6 +281,10 @@ void Init()
 	g_sim.stick_yaw_rate = stickYawDeg * 0.0174532925f;
 	g_sim.stick_pitch_rate = stickPitchDeg * 0.0174532925f;
 
+	// natural_mouse pointer speed (screen widths per second).
+	g_sim.stick_pointer_speed = GetFloatSetting( "sim_stick_pointer_speed", g_sim.stick_pointer_speed );
+	g_sim.stick_pointer_speed = std::max( 0.05f, std::min( 3.0f, g_sim.stick_pointer_speed ) );
+
 	// Z reset distance: keep it in a sane range (0.1 .. 3 m).
 	g_sim.hand_reset_distance = GetFloatSetting( "hand_reset_distance_m", g_sim.hand_reset_distance );
 	g_sim.hand_reset_distance = std::max( 0.1f, std::min( 3.0f, g_sim.hand_reset_distance ) );
@@ -344,7 +378,8 @@ void Update( RawInput::State &input )
 	if ( ( g_down && !g_sim.last_g ) || ( pad_mode && !g_sim.last_pad_mode ) )
 	{
 		g_sim.natural_mouse = !g_sim.natural_mouse;
-		DriverLog( "shiyan_nakedmonitor: interaction mode -> %s",
+		ResetHands();
+		DriverLog( "shiyan_nakedmonitor: interaction mode -> %s (hands reset to the head).",
 			g_sim.natural_mouse ? "natural_mouse (cursor = panel pointer)"
 								 : "vr_sim (mouse aims the active target)" );
 	}
@@ -530,6 +565,12 @@ void Update( RawInput::State &input )
 		const float yawRate = g_sim.stick_yaw_rate * lookScale;
 		const float pitchRate = g_sim.stick_pitch_rate * lookScale;
 
+		if ( !g_gamepad.lookModifier )
+		{
+			g_sim.pointer_accum_x = 0.0f;
+			g_sim.pointer_accum_y = 0.0f;
+		}
+
 		if ( rotateView )
 		{
 			g_sim.head_yaw = WrapPi( g_sim.head_yaw
@@ -539,12 +580,25 @@ void Update( RawInput::State &input )
 		}
 		else if ( g_sim.natural_mouse )
 		{
-			const int hand = g_sim.primary_hand;
-			g_sim.hand_ray_yaw[ hand ] = WrapPi( g_sim.hand_ray_yaw[ hand ]
-				- g_gamepad.lookX * yawRate * g_sim.hand_look_gain * dt );
-			g_sim.hand_ray_pitch[ hand ] += g_gamepad.lookY * pitchRate * g_sim.hand_look_gain * dt;
-			g_sim.hand_ray_pitch[ hand ] = std::max( -kHeadMaxPitch,
-				std::min( kHeadMaxPitch, g_sim.hand_ray_pitch[ hand ] ) );
+			// natural_mouse: LB + right stick moves the pointer, exactly like the
+			// mouse; the hand aim follows the eye -> cursor ray (all directions).
+			const float screenW = static_cast< float >( std::max( 1, GetSystemMetrics( SM_CXSCREEN ) ) );
+			const float speed = screenW * g_sim.stick_pointer_speed * lookScale;
+			g_sim.pointer_accum_x += g_gamepad.lookX * speed * dt;
+			g_sim.pointer_accum_y -= g_gamepad.lookY * speed * dt;
+
+			const int stepX = static_cast< int >( g_sim.pointer_accum_x );
+			const int stepY = static_cast< int >( g_sim.pointer_accum_y );
+			if ( stepX != 0 || stepY != 0 )
+			{
+				POINT cursor = {};
+				if ( GetCursorPos( &cursor ) )
+				{
+					SetCursorPos( cursor.x + stepX, cursor.y + stepY );
+					g_sim.pointer_accum_x -= static_cast< float >( stepX );
+					g_sim.pointer_accum_y -= static_cast< float >( stepY );
+				}
+			}
 		}
 		else
 		{
@@ -556,37 +610,14 @@ void Update( RawInput::State &input )
 		}
 	}
 
-	// --- Z / Back: reset both hands in front of the head ------------------
+	// --- Z / R3: reset both hands in front of the head --------------------
 	const bool z_down = input.keys[ 'Z' ];
 	const bool pad_reset = g_gamepad.connected && g_gamepad.reset && !g_sim.natural_mouse;
 	if ( ( z_down && !g_sim.last_z ) || ( pad_reset && !g_sim.last_pad_reset ) )
 	{
-		float headQuat[ 4 ] = {};
-		Quat::FromYawPitch( g_sim.head_yaw, g_sim.head_pitch, headQuat );
-		const float forwardIn[ 3 ] = { 0.0f, 0.0f, -1.0f };
-		const float rightIn[ 3 ] = { 1.0f, 0.0f, 0.0f };
-		float forward[ 3 ] = {};
-		float right[ 3 ] = {};
-		Quat::RotateVector( headQuat, forwardIn, forward );
-		Quat::RotateVector( headQuat, rightIn, right );
-
-		const float headY = g_sim.head_offset[ 1 ];
-		const float resetDistance = g_sim.hand_reset_distance;
-		const float resetHeight = g_sim.hand_reset_height_offset;
-		for ( int hand = 0; hand < 2; ++hand )
-		{
-			const float side = ( hand == 0 ) ? -kHandResetHalfSpacing : kHandResetHalfSpacing;
-			g_sim.hand_pos[ hand ][ 0 ] = g_sim.head_offset[ 0 ] + forward[ 0 ] * resetDistance + right[ 0 ] * side;
-			g_sim.hand_pos[ hand ][ 1 ] = headY + forward[ 1 ] * resetDistance + right[ 1 ] * side + resetHeight;
-			g_sim.hand_pos[ hand ][ 2 ] = g_sim.head_offset[ 2 ] + forward[ 2 ] * resetDistance + right[ 2 ] * side;
-			g_sim.hand_yaw[ hand ] = g_sim.head_yaw;
-			g_sim.hand_pitch[ hand ] = g_sim.head_pitch;
-			g_sim.hand_ray_yaw[ hand ] = 0.0f;
-			g_sim.hand_ray_pitch[ hand ] = 0.0f;
-		}
-
+		ResetHands();
 		DriverLog( "shiyan_nakedmonitor: Z reset both hands to %.2fm in front of the head (height %+.2fm, facing the head).",
-			resetDistance, resetHeight );
+			g_sim.hand_reset_distance, g_sim.hand_reset_height_offset );
 	}
 	g_sim.last_z = z_down;
 	g_sim.last_pad_reset = pad_reset;
@@ -740,11 +771,10 @@ void GetControllerPose( int hand, float outPosition[ 3 ], float outOrientation[ 
 			{
 				outPosition[ i ] = rayPos[ i ];
 			}
-
-			// Extra aim offset on top of the ray (gamepad LB + right stick).
-			float offset[ 4 ] = {};
-			Quat::FromYawPitch( g_sim.hand_ray_yaw[ idx ], g_sim.hand_ray_pitch[ idx ], offset );
-			Quat::Multiply( offset, rayQuat, outOrientation );
+			for ( int i = 0; i < 4; ++i )
+			{
+				outOrientation[ i ] = rayQuat[ i ];
+			}
 			return;
 		}
 	}

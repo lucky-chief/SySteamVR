@@ -257,7 +257,7 @@ deliberate:
 |---|---|---|
 | Left stick | Move the head | Move the active target |
 | Right stick | Turn the view | Turn the active target |
-| `LB` + right stick | Turn the primary hand | Turn the view |
+| `LB` + right stick | Move the pointer (hands follow the ray) | Turn the view |
 | `RB` + left stick | Head up/down | Active target up/down |
 | `RT` / `LT` | Trigger / grip (active hand, analog) | same |
 | `A` / `B` | `A` = face primary; tap `B` = face secondary, hold `B` = 3x move/turn speed (>0.3 s) | same |
@@ -269,7 +269,9 @@ deliberate:
 | `R3` (right stick click) | - | Reset both hands (`Z`) |
 | Rumble | `VREvent_Input_HapticVibration` -> `XInputSetState` | same |
 
-Keyboard target switching (`Tab` / `1` / `2` / `3`) still works.
+Keyboard target switching (`Tab` / `1` / `2` / `3`) still works. Switching the
+interaction mode (`G` or `L3`) also resets both hands to the head's orientation,
+exactly like `Z` / `R3`.
 
 Setup:
 
@@ -286,7 +288,8 @@ Setup:
 Settings (`shiyan_nakedmonitor_gamepad`): `enabled`, `slot` (`-1` = first
 connected pad), `deadzone`, `rumble`, `rumble_gain`.
 `sim_stick_look_yaw` / `sim_stick_look_pitch` (degrees per second, default
-130 / 80) live in `shiyan_nakedmonitor_controller`.
+130 / 80), `sim_stick_pointer_speed` (screen widths per second for the
+natural_mouse pointer, default 0.55), live in `shiyan_nakedmonitor_controller`.
 
 ## Key-hint overlay (direct mode)
 
