@@ -94,6 +94,23 @@ struct SimState
 	float wheel_stick_seconds = 0.0f;
 	float wheel_stick_sign = 0.0f;
 
+	// Z reset: hands are placed this many metres in front of the head
+	// ("hand_reset_distance_m") and this many metres above/below it
+	// ("hand_reset_height_offset_m", negative = lower).
+	float hand_reset_distance = kHandResetDistance;
+	float hand_reset_height_offset = -0.3f;
+
+	// After a Z reset the hands face the head; keep them that way until the
+	// mouse moves (or the target changes) instead of letting the absolute aim
+	// overwrite the orientation on the very next frame.
+	bool hand_aim_lock = false;
+
+	// Re-anchor offset applied to the absolute cursor -> hand-aim mapping. A Z
+	// reset sets it so the first mouse movement continues from the head-facing
+	// orientation instead of snapping to the cursor-derived angle.
+	float aim_yaw_offset = 0.0f;
+	float aim_pitch_offset = 0.0f;
+
 	// Edge detection.
 	bool last_g = false;
 	bool last_1 = false;
@@ -216,15 +233,23 @@ void Init()
 	g_sim.hand_look_gain = GetFloatSetting( "sim_hand_look", g_sim.hand_look_gain );
 	g_sim.hand_move_gain = GetFloatSetting( "sim_hand_move", g_sim.hand_move_gain );
 
+	// Z reset distance: keep it in a sane range (0.1 .. 3 m).
+	g_sim.hand_reset_distance = GetFloatSetting( "hand_reset_distance_m", g_sim.hand_reset_distance );
+	g_sim.hand_reset_distance = std::max( 0.1f, std::min( 3.0f, g_sim.hand_reset_distance ) );
+
+	g_sim.hand_reset_height_offset = GetFloatSetting( "hand_reset_height_offset_m", g_sim.hand_reset_height_offset );
+	g_sim.hand_reset_height_offset = std::max( -1.5f, std::min( 1.0f, g_sim.hand_reset_height_offset ) );
+
 	// Initial orientation (degrees), useful for aiming presets / testing.
 	const float yawDeg = GetFloatSetting( "head_yaw_deg", 0.0f );
 	const float pitchDeg = GetFloatSetting( "head_pitch_deg", 0.0f );
 	g_sim.head_yaw = yawDeg * 0.0174532925f;
 	g_sim.head_pitch = pitchDeg * 0.0174532925f;
 
-	DriverLog( "shiyan_nakedmonitor: input sim (mode %s; target %s; primary hand %s).",
+	DriverLog( "shiyan_nakedmonitor: input sim (mode %s; target %s; primary hand %s; Z reset %.2fm, height %+.2fm).",
 		g_sim.natural_mouse ? "natural_mouse" : "vr_sim",
-		TargetName( g_sim.target ), g_sim.primary_hand == 0 ? "left" : "right" );
+		TargetName( g_sim.target ), g_sim.primary_hand == 0 ? "left" : "right",
+		g_sim.hand_reset_distance, g_sim.hand_reset_height_offset );
 }
 
 void SetHeadBaseHeight( float meters )
@@ -245,6 +270,8 @@ void Update( RawInput::State &input )
 		input.dy = 0;
 	}
 
+	const bool mouseMoved = ( input.dx != 0 || input.dy != 0 );
+
 	const auto now = std::chrono::steady_clock::now();
 	float dt = 0.0f;
 	if ( g_sim.last_time != std::chrono::steady_clock::time_point{} )
@@ -259,6 +286,7 @@ void Update( RawInput::State &input )
 	if ( g_down && !g_sim.last_g )
 	{
 		g_sim.natural_mouse = !g_sim.natural_mouse;
+		g_sim.hand_aim_lock = false;
 		DriverLog( "shiyan_nakedmonitor: interaction mode -> %s",
 			g_sim.natural_mouse ? "natural_mouse (cursor = panel pointer)"
 								 : "vr_sim (mouse aims the active target)" );
@@ -270,6 +298,7 @@ void Update( RawInput::State &input )
 	const bool two = input.keys[ '2' ];
 	const bool three = input.keys[ '3' ];
 	const bool tab = input.keys[ VK_TAB ];
+	const VrSim::Target previousTarget = g_sim.target;
 	if ( !g_sim.natural_mouse )
 	{
 		if ( one && !g_sim.last_1 )
@@ -295,6 +324,11 @@ void Update( RawInput::State &input )
 	g_sim.last_2 = two;
 	g_sim.last_3 = three;
 	g_sim.last_tab = tab;
+
+	if ( g_sim.target != previousTarget )
+	{
+		g_sim.hand_aim_lock = false;
+	}
 
 	if ( !g_sim.target_logged )
 	{
@@ -388,11 +422,20 @@ void Update( RawInput::State &input )
 	}
 
 	// --- active hand absolute aim -----------------------------------------
-	if ( !g_sim.natural_mouse && !headIsTarget && !g_sim.mouse_translate && !headLookModifier )
+	// A Z reset locks the orientation to the head; any mouse movement unlocks
+	// it again (absolute aim resumes from the cursor).
+	if ( mouseMoved )
+	{
+		g_sim.hand_aim_lock = false;
+	}
+	if ( !g_sim.hand_aim_lock && !g_sim.natural_mouse && !headIsTarget
+		 && !g_sim.mouse_translate && !headLookModifier )
 	{
 		const int hand = ( g_sim.target == Target::LeftHand ) ? 0 : 1;
-		g_sim.hand_yaw[ hand ] = -normalizedX * kHandMaxYaw * g_sim.hand_look_gain;
-		g_sim.hand_pitch[ hand ] = -normalizedY * kHandMaxPitch * g_sim.hand_look_gain;
+		g_sim.hand_yaw[ hand ] = g_sim.aim_yaw_offset + ( -normalizedX * kHandMaxYaw * g_sim.hand_look_gain );
+		g_sim.hand_pitch[ hand ] = std::max( -kHandMaxPitch,
+			std::min( kHandMaxPitch,
+				g_sim.aim_pitch_offset + ( -normalizedY * kHandMaxPitch * g_sim.hand_look_gain ) ) );
 	}
 
 	// --- Z: reset both hands in front of the head -------------------------
@@ -409,16 +452,27 @@ void Update( RawInput::State &input )
 		Quat::RotateVector( headQuat, rightIn, right );
 
 		const float headY = g_sim.head_offset[ 1 ];
+		const float resetDistance = g_sim.hand_reset_distance;
+		const float resetHeight = g_sim.hand_reset_height_offset;
 		for ( int hand = 0; hand < 2; ++hand )
 		{
 			const float side = ( hand == 0 ) ? -kHandResetHalfSpacing : kHandResetHalfSpacing;
-			g_sim.hand_pos[ hand ][ 0 ] = g_sim.head_offset[ 0 ] + forward[ 0 ] * kHandResetDistance + right[ 0 ] * side;
-			g_sim.hand_pos[ hand ][ 1 ] = headY + forward[ 1 ] * kHandResetDistance + right[ 1 ] * side;
-			g_sim.hand_pos[ hand ][ 2 ] = g_sim.head_offset[ 2 ] + forward[ 2 ] * kHandResetDistance + right[ 2 ] * side;
+			g_sim.hand_pos[ hand ][ 0 ] = g_sim.head_offset[ 0 ] + forward[ 0 ] * resetDistance + right[ 0 ] * side;
+			g_sim.hand_pos[ hand ][ 1 ] = headY + forward[ 1 ] * resetDistance + right[ 1 ] * side + resetHeight;
+			g_sim.hand_pos[ hand ][ 2 ] = g_sim.head_offset[ 2 ] + forward[ 2 ] * resetDistance + right[ 2 ] * side;
 			g_sim.hand_yaw[ hand ] = g_sim.head_yaw;
 			g_sim.hand_pitch[ hand ] = g_sim.head_pitch;
 		}
-		DriverLog( "shiyan_nakedmonitor: Z reset both hands to %.2fm in front of the head.", kHandResetDistance );
+
+		// Re-anchor the absolute cursor -> aim mapping at the current cursor
+		// position: the first mouse movement then continues from the
+		// head-facing orientation instead of jumping to the cursor angle.
+		g_sim.aim_yaw_offset = g_sim.head_yaw - ( -normalizedX * kHandMaxYaw * g_sim.hand_look_gain );
+		g_sim.aim_pitch_offset = g_sim.head_pitch - ( -normalizedY * kHandMaxPitch * g_sim.hand_look_gain );
+
+		g_sim.hand_aim_lock = true;
+		DriverLog( "shiyan_nakedmonitor: Z reset both hands to %.2fm in front of the head (height %+.2fm, facing the head).",
+			resetDistance, resetHeight );
 	}
 	g_sim.last_z = z_down;
 

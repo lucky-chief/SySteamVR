@@ -224,7 +224,8 @@ both hands plus an "active target", ported from SyOpenXRRuntime's `vr_sim`:
     active);
   * `WASD` / `QE` move the **active target** in view space, `Shift` = 3x;
   * `F` toggles mouse-translate mode (mouse moves the target sideways/up-down);
-  * `Z` resets both hands to 1 m in front of the head;
+  * `Z` resets both hands to `hand_reset_distance_m` in front of the head
+    (offset vertically by `hand_reset_height_offset_m`), facing the head;
   * wheel moves the active hand forward/back (0.1 m per notch).
 * **natural_mouse** (`G` toggles): the mouse is a panel pointer, both hands aim
   along the eye -> cursor ray, `WASD` walks the head.
@@ -235,7 +236,9 @@ both hands plus an "active target", ported from SyOpenXRRuntime's `vr_sim`:
 
 Tunables live in `shiyan_nakedmonitor_controller`: `interaction_mode`,
 `primary_hand`, `head_look_invert`, `sim_head_look`, `sim_head_move`,
-`sim_hand_look`, `sim_hand_move`, `cursor_recenter`, `ray_origin_*`, ...
+`sim_hand_look`, `sim_hand_move`, `hand_reset_distance_m` / 
+`hand_reset_height_offset_m` (Z reset distance and height relative to the head),
+`cursor_recenter`, `ray_origin_*`, ...
 
 ## Not yet implemented
 
