@@ -128,6 +128,13 @@ float4 PSMain( VSOut i ) : SV_Target
 	float2 uv = g_uvRect.xy + i.uv * g_uvRect.zw;
 	return float4( eyeTex.Sample( eyeSampler, uv ).rgb, 1.0 );
 }
+
+// Key-hint overlay: keep the texture alpha and let the blend state composite it.
+float4 PSMainAlpha( VSOut i ) : SV_Target
+{
+	float2 uv = g_uvRect.xy + i.uv * g_uvRect.zw;
+	return eyeTex.Sample( eyeSampler, uv );
+}
 )";
 
 } // namespace
@@ -208,6 +215,34 @@ void NakedDirectModeComponent::ToggleCursor()
 	}
 
 	DriverLog( "shiyan_nakedmonitor: [direct] cursor %s (H).", cursor_hidden_ ? "hidden" : "visible" );
+}
+
+void NakedDirectModeComponent::ToggleHelp()
+{
+	std::lock_guard< std::mutex > lock( mutex_ );
+	help_.Init();
+	help_.Toggle();
+	DriverLog( "shiyan_nakedmonitor: [direct] help overlay %s (%zu page(s)).",
+		help_.IsVisible() ? "shown" : "hidden", help_.PageCount() );
+}
+
+void NakedDirectModeComponent::NextHelpPage( int delta )
+{
+	std::lock_guard< std::mutex > lock( mutex_ );
+	if ( !help_.IsVisible() || help_.PageCount() == 0 )
+	{
+		return;
+	}
+	help_.NextPage( delta );
+	DriverLog( "shiyan_nakedmonitor: [direct] help page %zu/%zu.",
+		help_.CurrentPage() + 1, help_.PageCount() );
+}
+
+bool NakedDirectModeComponent::IsHelpVisible()
+{
+	std::lock_guard< std::mutex > lock( mutex_ );
+	help_.Init();
+	return help_.IsVisible();
 }
 
 void NakedDirectModeComponent::EnterCallback( const char *name )
@@ -563,6 +598,41 @@ bool NakedDirectModeComponent::EnsurePipeline()
 		return false;
 	}
 
+	// Optional key-hint overlay pass: a second pixel shader that preserves alpha.
+	ID3DBlob *alpha_blob = nullptr;
+	errors = nullptr;
+	if ( SUCCEEDED( D3DCompile( kShaderSource, std::strlen( kShaderSource ), "shiyan_direct", nullptr, nullptr,
+			 "PSMainAlpha", "ps_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &alpha_blob, &errors ) )
+		 && alpha_blob != nullptr )
+	{
+		device_->CreatePixelShader( alpha_blob->GetBufferPointer(), alpha_blob->GetBufferSize(),
+			nullptr, &overlay_pixel_shader_ );
+	}
+	else
+	{
+		DriverLog( "shiyan_nakedmonitor: [direct] help-overlay shader compile failed: %s",
+			errors != nullptr ? static_cast< const char * >( errors->GetBufferPointer() ) : "?" );
+	}
+	SafeRelease( errors );
+	SafeRelease( alpha_blob );
+
+	if ( overlay_pixel_shader_ != nullptr )
+	{
+		D3D11_BLEND_DESC blend = {};
+		blend.RenderTarget[ 0 ].BlendEnable = TRUE;
+		blend.RenderTarget[ 0 ].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+		blend.RenderTarget[ 0 ].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+		blend.RenderTarget[ 0 ].BlendOp = D3D11_BLEND_OP_ADD;
+		blend.RenderTarget[ 0 ].SrcBlendAlpha = D3D11_BLEND_ONE;
+		blend.RenderTarget[ 0 ].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+		blend.RenderTarget[ 0 ].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+		blend.RenderTarget[ 0 ].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+		if ( FAILED( device_->CreateBlendState( &blend, &overlay_blend_state_ ) ) )
+		{
+			overlay_blend_state_ = nullptr;
+		}
+	}
+
 	D3D11_SAMPLER_DESC sd = {};
 	sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
 	sd.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -617,6 +687,9 @@ void NakedDirectModeComponent::Shutdown()
 	sync_texture_handle_ = INVALID_SHARED_TEXTURE_HANDLE;
 	logged_sync_acquire_ = false;
 
+	help_.ReleaseTextures();
+	SafeRelease( overlay_blend_state_ );
+	SafeRelease( overlay_pixel_shader_ );
 	SafeRelease( uv_constant_buffer_ );
 	SafeRelease( sampler_ );
 	SafeRelease( pixel_shader_ );
@@ -1038,6 +1111,67 @@ void NakedDirectModeComponent::Present( vr::SharedTextureHandle_t syncTexture )
 	else
 	{
 		DrawSolidColor();
+	}
+
+	// --- key-hint overlay -------------------------------------------------
+	// Drawn after the SBS image, once per eye half, centered and aspect-fit.
+	if ( pipeline_ready_ && overlay_pixel_shader_ != nullptr && overlay_blend_state_ != nullptr
+		 && help_.IsVisible() && help_.EnsureTextures( device_, color_mode_ == 0 ) )
+	{
+		float texture_width = 0.0f;
+		float texture_height = 0.0f;
+		ID3D11ShaderResourceView *help_srv = nullptr;
+		if ( help_.GetPage( help_.CurrentPage(), &texture_width, &texture_height, &help_srv )
+			 && texture_width > 0.0f && texture_height > 0.0f )
+		{
+			const float half_w = static_cast< float >( window_width_ ) * 0.5f;
+			const float half_h = static_cast< float >( window_height_ );
+			float image_w = half_w * help_.WidthRatio();
+			float image_h = image_w * ( texture_height / texture_width );
+			if ( image_h > half_h )
+			{
+				image_h = half_h;
+				image_w = image_h * ( texture_width / texture_height );
+			}
+			const float offset_x = ( half_w - image_w ) * 0.5f;
+			const float offset_y = ( half_h - image_h ) * 0.5f;
+
+			context_->IASetInputLayout( nullptr );
+			context_->IASetPrimitiveTopology( D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST );
+			context_->VSSetShader( vertex_shader_, nullptr, 0 );
+			context_->PSSetShader( overlay_pixel_shader_, nullptr, 0 );
+			context_->PSSetSamplers( 0, 1, &sampler_ );
+			context_->VSSetConstantBuffers( 0, 1, &uv_constant_buffer_ );
+			context_->PSSetConstantBuffers( 0, 1, &uv_constant_buffer_ );
+
+			D3D11_MAPPED_SUBRESOURCE mapped = {};
+			if ( SUCCEEDED( context_->Map( uv_constant_buffer_, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped ) ) )
+			{
+				const float uv_rect[ 4 ] = { 0.0f, 0.0f, 1.0f, 1.0f };
+				std::memcpy( mapped.pData, uv_rect, sizeof( uv_rect ) );
+				context_->Unmap( uv_constant_buffer_, 0 );
+			}
+
+			context_->OMSetBlendState( overlay_blend_state_, nullptr, 0xFFFFFFFF );
+			context_->PSSetShaderResources( 0, 1, &help_srv );
+
+			for ( int half = 0; half < 2; ++half )
+			{
+				D3D11_VIEWPORT viewport = {};
+				viewport.TopLeftX = static_cast< float >( half ) * half_w + offset_x;
+				viewport.TopLeftY = offset_y;
+				viewport.Width = image_w;
+				viewport.Height = image_h;
+				viewport.MinDepth = 0.0f;
+				viewport.MaxDepth = 1.0f;
+				context_->RSSetViewports( 1, &viewport );
+				context_->Draw( 3, 0 );
+			}
+
+			ID3D11ShaderResourceView *null_srv = nullptr;
+			context_->PSSetShaderResources( 0, 1, &null_srv );
+			context_->OMSetBlendState( nullptr, nullptr, 0xFFFFFFFF );
+		}
 	}
 
 	// Non-blocking present; PostPresent paces the frame rate. A blocking

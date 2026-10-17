@@ -241,6 +241,23 @@ Tunables live in `shiyan_nakedmonitor_controller`: `interaction_mode`,
 `hand_reset_height_offset_m` (Z reset distance and height relative to the head),
 `cursor_recenter`, `ray_origin_*`, ...
 
+## Key-hint overlay (direct mode)
+
+`V` shows/hides a set of PNG hint pages drawn over the SBS output. While the
+overlay is visible, `A`/`D` or `Left`/`Right` page through the images (wrapping)
+and those keys are withheld from the input simulator (no strafing/thumbstick).
+
+Settings live in `shiyan_nakedmonitor_help`:
+
+| Key | Meaning |
+|---|---|
+| `enabled` | Master switch |
+| `images` | Comma-separated PNG file names, one page each, under `resources/images/` |
+| `width_ratio` | Page width as a fraction of one eye half (default 0.9) |
+
+Each page is centered in both eye halves and aspect-fit (never stretched); PNG
+alpha is blended over the SBS image. Only available with `display_mode = direct`.
+
 ## Not yet implemented
 
 * Real six-DoF tracking (the pose is simulated from keyboard/mouse).

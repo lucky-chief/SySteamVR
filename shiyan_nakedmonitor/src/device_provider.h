@@ -27,4 +27,7 @@ private:
 	std::unique_ptr< ShiyanNakedController > controller_right_;
 	bool raw_input_started_ = false;
 	bool prev_h_down_ = false; // H hotkey edge detection (cursor toggle)
+	bool prev_v_down_ = false; // V hotkey edge detection (help overlay)
+	bool prev_help_left_ = false;  // A / Left paging edge
+	bool prev_help_right_ = false; // D / Right paging edge
 };

@@ -10,6 +10,7 @@
 #include <thread>
 #include <vector>
 
+#include "help_overlay.h"
 #include "openvr_driver.h"
 
 // Forward declarations so this header stays free of <d3d11.h>/<windows.h>.
@@ -23,6 +24,7 @@ struct ID3D11VertexShader;
 struct ID3D11PixelShader;
 struct ID3D11SamplerState;
 struct ID3D11Buffer;
+struct ID3D11BlendState;
 
 //-----------------------------------------------------------------------------
 // IVRDriverDirectModeComponent.
@@ -57,6 +59,12 @@ public:
 	// H hotkey: toggle the OS pointer over the output window. Requires direct
 	// mode, otherwise it is a no-op.
 	void ToggleCursor();
+
+	// Key-hint overlay (direct mode only): V shows/hides it; while visible,
+	// A/D or Left/Right page through the images.
+	void ToggleHelp();
+	void NextHelpPage( int delta );
+	bool IsHelpVisible();
 
 private:
 	// Lazily creates the window / device / swap chain on first use. Safe to call
@@ -112,6 +120,11 @@ private:
 	ID3D11SamplerState *sampler_ = nullptr;
 	ID3D11Buffer *uv_constant_buffer_ = nullptr;
 	bool pipeline_ready_ = false;
+
+	// Key-hint overlay: an alpha-blended textured quad drawn over the SBS output.
+	ID3D11PixelShader *overlay_pixel_shader_ = nullptr;
+	ID3D11BlendState *overlay_blend_state_ = nullptr;
+	HelpOverlay help_;
 
 	// Swap-texture sets handed to the compositor. Each set is one eye's ring of
 	// shared textures; the key is the set's first handle.

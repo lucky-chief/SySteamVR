@@ -50,6 +50,7 @@ private:
 		Comp_AppMenuClick,
 		Comp_JoystickX,
 		Comp_JoystickY,
+		Comp_JoystickClick,
 		Comp_Haptic,
 		Comp_Count
 	};

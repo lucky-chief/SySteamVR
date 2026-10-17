@@ -47,7 +47,7 @@ target_link_libraries(driver_shiyan_nakedmonitor PRIVATE "${OPENVR_API_LIBRARY}"
 if(WIN32)
   # EnumDisplayMonitors / GetMonitorInfo (window auto-placement), the
   # direct-mode D3D11 output (window + swap chain) and the shader compiler.
-  target_link_libraries(driver_shiyan_nakedmonitor PRIVATE user32 d3d11 dxgi d3dcompiler)
+  target_link_libraries(driver_shiyan_nakedmonitor PRIVATE user32 d3d11 dxgi d3dcompiler windowscodecs ole32)
 endif()
 
 # A driver DLL must live at <driver_name>/bin/<platform><arch>/driver_<driver_name>.dll

@@ -132,6 +132,11 @@ public:
 	// H hotkey: show/hide the OS pointer over the direct-mode output window.
 	void ToggleCursor();
 
+	// Key-hint overlay (direct mode only): V shows/hides, A/D or Left/Right page.
+	void ToggleHelpOverlay();
+	void NextHelpPage( int delta );
+	bool IsHelpVisible();
+
 	// Pushes the current (eye-tracked) eye-to-head transforms and off-axis
 	// projection to vrserver via IVRServerDriverHost::SetDisplayEyeToHead /
 	// SetDisplayProjectionRaw whenever the eye positions changed noticeably.

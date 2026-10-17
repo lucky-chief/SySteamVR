@@ -7,6 +7,11 @@
 #include "raw_input.h"
 #include "vr_sim.h"
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 static bool GetBoolSetting( const char *pchSection, const char *pchKey, bool bDefault )
 {
 	vr::EVRSettingsError error = vr::VRSettingsError_None;
@@ -96,6 +101,42 @@ void NakedDeviceProvider::RunFrame()
 	// Keyboard/mouse snapshot. VrSim routes it to the simulated head/hands and
 	// zeroes the mouse deltas it consumed.
 	RawInput::State input = RawInput::Consume();
+
+	// Key-hint overlay: V shows/hides it; while visible, A/D or Left/Right page
+	// through the images and are withheld from the simulator (no movement).
+	const bool v_down = input.keys[ 'V' ];
+	if ( v_down && !prev_v_down_ && hmd_device_ != nullptr )
+	{
+		hmd_device_->ToggleHelpOverlay();
+	}
+	prev_v_down_ = v_down;
+
+	if ( hmd_device_ != nullptr && hmd_device_->IsHelpVisible() )
+	{
+		const bool page_left = input.keys[ 'A' ] || input.keys[ VK_LEFT ];
+		const bool page_right = input.keys[ 'D' ] || input.keys[ VK_RIGHT ];
+		if ( page_left && !prev_help_left_ )
+		{
+			hmd_device_->NextHelpPage( -1 );
+		}
+		if ( page_right && !prev_help_right_ )
+		{
+			hmd_device_->NextHelpPage( 1 );
+		}
+		prev_help_left_ = page_left;
+		prev_help_right_ = page_right;
+
+		input.keys[ 'A' ] = false;
+		input.keys[ 'D' ] = false;
+		input.keys[ VK_LEFT ] = false;
+		input.keys[ VK_RIGHT ] = false;
+	}
+	else
+	{
+		prev_help_left_ = false;
+		prev_help_right_ = false;
+	}
+
 	VrSim::Update( input );
 
 	// H (edge-triggered): show/hide the OS pointer over the direct-mode output.

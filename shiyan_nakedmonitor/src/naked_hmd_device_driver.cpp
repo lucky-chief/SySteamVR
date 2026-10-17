@@ -886,6 +886,27 @@ void NakedHMDDeviceDriver::ToggleCursor()
 	}
 }
 
+void NakedHMDDeviceDriver::ToggleHelpOverlay()
+{
+	if ( direct_mode_component_ != nullptr )
+	{
+		direct_mode_component_->ToggleHelp();
+	}
+}
+
+void NakedHMDDeviceDriver::NextHelpPage( int delta )
+{
+	if ( direct_mode_component_ != nullptr )
+	{
+		direct_mode_component_->NextHelpPage( delta );
+	}
+}
+
+bool NakedHMDDeviceDriver::IsHelpVisible()
+{
+	return direct_mode_component_ != nullptr && direct_mode_component_->IsHelpVisible();
+}
+
 void NakedHMDDeviceDriver::PushDisplayTransforms()
 {
 	if ( device_index_ == vr::k_unTrackedDeviceIndexInvalid )

@@ -32,6 +32,11 @@
 		"ray_debug_log": false,
 		"wheel_invert": false
 	},
+	"shiyan_nakedmonitor_help": {
+		"enabled": true,
+		"images": "keyboard_mouse_help.png,gamepad_help.png",
+		"width_ratio": 0.9
+	},
 	"shiyan_nakedmonitor_ime": {
 		"enabled": true,
 		"processes": "vrcompositor,vrmonitor,vrdashboard,vrwebhelper,vrserver,steamwebhelper,steamtours",

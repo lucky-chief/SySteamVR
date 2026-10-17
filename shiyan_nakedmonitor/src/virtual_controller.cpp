@@ -71,6 +71,7 @@ vr::EVRInitError ShiyanNakedController::Activate( uint32_t unObjectId )
 			   &components_[ Comp_JoystickX ], vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedTwoSided ) == vr::VRInputError_None;
 	ok &= vr::VRDriverInput()->CreateScalarComponent( container, "/input/joystick/y",
 			   &components_[ Comp_JoystickY ], vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedTwoSided ) == vr::VRInputError_None;
+	ok &= createBoolean( "/input/joystick/click", components_[ Comp_JoystickClick ] );
 	ok &= vr::VRDriverInput()->CreateHapticComponent( container, "/output/haptic", &components_[ Comp_Haptic ] ) == vr::VRInputError_None;
 
 	if ( !ok )
@@ -156,6 +157,7 @@ void ShiyanNakedController::ApplyInput()
 	vr::VRDriverInput()->UpdateBooleanComponent( components_[ Comp_AppMenuClick ], input.menu, 0.0 );
 	vr::VRDriverInput()->UpdateScalarComponent( components_[ Comp_JoystickX ], input.thumbstickX, 0.0 );
 	vr::VRDriverInput()->UpdateScalarComponent( components_[ Comp_JoystickY ], input.thumbstickY, 0.0 );
+	vr::VRDriverInput()->UpdateBooleanComponent( components_[ Comp_JoystickClick ], input.thumbstickClick, 0.0 );
 }
 
 void ShiyanNakedController::RunFrame()
