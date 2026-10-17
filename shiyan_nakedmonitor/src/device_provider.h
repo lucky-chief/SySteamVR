@@ -25,4 +25,5 @@ private:
 	std::unique_ptr< NakedHMDDeviceDriver > hmd_device_;
 	std::unique_ptr< ShiyanNakedController > controller_;
 	bool raw_input_started_ = false;
+	bool prev_h_down_ = false; // H hotkey edge detection (cursor toggle)
 };

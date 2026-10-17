@@ -23,6 +23,26 @@ namespace
 
 const wchar_t *kOutputWindowClass = L"ShiyanNakedMonitorOutput";
 
+// When true, the OS pointer is hidden while it is over the output window, so
+// the panel shows only the VR image (the desktop pointer is not part of it).
+std::atomic< bool > g_hide_cursor{ true };
+
+// Custom message: re-apply the cursor after the H hotkey toggled it. SetCursor
+// must run on the window's own thread, so the toggle posts this.
+constexpr UINT kMsgRefreshCursor = WM_APP + 1;
+
+void ApplyOutputCursor()
+{
+	if ( g_hide_cursor.load() )
+	{
+		SetCursor( nullptr );
+	}
+	else
+	{
+		SetCursor( LoadCursorA( nullptr, IDC_ARROW ) );
+	}
+}
+
 // Settings section (same one the rest of the display config lives in).
 const char *kDisplaySection = "shiyan_nakedmonitor_display";
 
@@ -36,9 +56,20 @@ void SafeRelease( T *&p )
 	}
 }
 
-// A borderless output window has no interactive UI; the default proc is enough.
+// A borderless output window has no interactive UI; the default proc is enough,
+// except for the cursor, which we hide/show over the client area.
 LRESULT CALLBACK OutputWndProc( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam )
 {
+	if ( msg == kMsgRefreshCursor )
+	{
+		ApplyOutputCursor();
+		return 0;
+	}
+	if ( msg == WM_SETCURSOR && LOWORD( lParam ) == HTCLIENT )
+	{
+		ApplyOutputCursor();
+		return TRUE;
+	}
 	return DefWindowProcW( hwnd, msg, wParam, lParam );
 }
 
@@ -132,6 +163,14 @@ NakedDirectModeComponent::NakedDirectModeComponent( int32_t window_x, int32_t wi
 	}
 
 	error = vr::VRSettingsError_None;
+	cursor_hidden_ = vr::VRSettings()->GetBool( kDisplaySection, "direct_hide_cursor", &error );
+	if ( error != vr::VRSettingsError_None )
+	{
+		cursor_hidden_ = true;
+	}
+	g_hide_cursor.store( cursor_hidden_ );
+
+	error = vr::VRSettingsError_None;
 	display_frequency_ = vr::VRSettings()->GetFloat( kDisplaySection, "display_frequency", &error );
 	if ( error != vr::VRSettingsError_None || display_frequency_ < 1.0f )
 	{
@@ -155,6 +194,20 @@ NakedDirectModeComponent::NakedDirectModeComponent( int32_t window_x, int32_t wi
 NakedDirectModeComponent::~NakedDirectModeComponent()
 {
 	Shutdown();
+}
+
+void NakedDirectModeComponent::ToggleCursor()
+{
+	cursor_hidden_ = !cursor_hidden_;
+	g_hide_cursor.store( cursor_hidden_ );
+
+	// SetCursor is thread-affine, so let the window thread re-apply it.
+	if ( window_ != nullptr )
+	{
+		PostMessageW( reinterpret_cast< HWND >( window_ ), kMsgRefreshCursor, 0, 0 );
+	}
+
+	DriverLog( "shiyan_nakedmonitor: [direct] cursor %s (H).", cursor_hidden_ ? "hidden" : "visible" );
 }
 
 void NakedDirectModeComponent::EnterCallback( const char *name )
@@ -254,6 +307,7 @@ void NakedDirectModeComponent::WindowThreadMain()
 	wc.lpfnWndProc = OutputWndProc;
 	wc.hInstance = instance;
 	wc.lpszClassName = kOutputWindowClass;
+	wc.hCursor = nullptr; // the cursor is set in WM_SETCURSOR (hidden or arrow)
 	RegisterClassExW( &wc );
 
 	// The output window is a normal top-level window (so it shows up in Alt+Tab

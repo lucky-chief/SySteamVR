@@ -878,6 +878,14 @@ void NakedHMDDeviceDriver::EnforceWindowPlacement()
 	}
 }
 
+void NakedHMDDeviceDriver::ToggleCursor()
+{
+	if ( direct_mode_component_ != nullptr )
+	{
+		direct_mode_component_->ToggleCursor();
+	}
+}
+
 void NakedHMDDeviceDriver::PushDisplayTransforms()
 {
 	if ( device_index_ == vr::k_unTrackedDeviceIndexInvalid )

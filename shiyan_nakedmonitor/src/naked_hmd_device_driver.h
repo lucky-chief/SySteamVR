@@ -128,6 +128,9 @@ public:
 	// NakedDisplayComponent::EnforceWindowPlacement).
 	void EnforceWindowPlacement();
 
+	// H hotkey: show/hide the OS pointer over the direct-mode output window.
+	void ToggleCursor();
+
 	// Pushes the current (eye-tracked) eye-to-head transforms and off-axis
 	// projection to vrserver via IVRServerDriverHost::SetDisplayEyeToHead /
 	// SetDisplayProjectionRaw whenever the eye positions changed noticeably.

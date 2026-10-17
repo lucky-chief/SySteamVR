@@ -54,6 +54,10 @@ public:
 	void PostPresent( const Throttling_t *pThrottling ) override;
 	void GetFrameTiming( vr::DriverDirectMode_FrameTiming *pFrameTiming ) override;
 
+	// H hotkey: toggle the OS pointer over the output window. Requires direct
+	// mode, otherwise it is a no-op.
+	void ToggleCursor();
+
 private:
 	// Lazily creates the window / device / swap chain on first use. Safe to call
 	// from any of the compositor callbacks.
@@ -150,6 +154,10 @@ private:
 	// full-screen window hides every other window and makes Alt+Tab look broken.
 	// Set via "direct_window_topmost".
 	bool topmost_ = false;
+
+	// Whether the OS pointer is currently hidden over the output window. Starts
+	// from "direct_hide_cursor" and is toggled by the H hotkey.
+	bool cursor_hidden_ = true;
 
 	// Sync-texture handshake (see Driver_API_Documentation.md). The compositor
 	// hands Present() a shared texture whose keyed mutex the driver acquires to

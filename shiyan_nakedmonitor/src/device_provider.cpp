@@ -83,6 +83,14 @@ void NakedDeviceProvider::RunFrame()
 	RawInput::State input = RawInput::Consume();
 	VirtualHead::Update( input );
 
+	// H (edge-triggered): show/hide the OS pointer over the direct-mode output.
+	const bool h_down = input.keys[ 'H' ];
+	if ( h_down && !prev_h_down_ && hmd_device_ != nullptr )
+	{
+		hmd_device_->ToggleCursor();
+	}
+	prev_h_down_ = h_down;
+
 	// Keep the VR windows on the English keyboard layout so typing in VR does
 	// not produce Chinese IME text (see ime_switch.h). Internally throttled.
 	ImeSwitch::Update();

@@ -35,11 +35,12 @@
 	},
 	"shiyan_nakedmonitor_display": {
 		"auto_place_window": true,
-		"monitor_name_substring": "SYS_A_1E320H",
+		"monitor_name_substring": "XWU_CBA",
 		"display_mode": "direct",
 		"direct_color_mode": "srgb",
 		"direct_vsync": true,
 		"direct_window_topmost": false,
+		"direct_hide_cursor": true,
 		"window_x": 0,
 		"window_y": 0,
 		"window_width": 2560,
@@ -52,17 +53,17 @@
 		"vsync_to_photons": 0.011,
 		"seated_height_meters": 1.5,
 		"swap_eyes": false,
-		"eye_tracking": true,
+		"eye_tracking": false,
 		"screen_width_m": 0.6981,
 		"screen_height_m": 0.3927,
 		"screen_center_height_m": 1.2,
-		"screen_distance_m": 0.1,
+		"screen_distance_m": 0.3,
 		"projection_push_mode": 0,
 		"wait_3d_resolution": false,
 		"is_on_desktop_property": false,
 		"display_debug_mode": true,
 		"universe_id": 2,
 		"provide_chaperone": true,
-		"play_area_meters": 1.0
+		"play_area_meters": 0.1
 	}
 }
