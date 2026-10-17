@@ -19,17 +19,25 @@
 			"type": "button",
 			"order": 4
 		},
-		"/input/application_menu": {
+		"/input/x": {
 			"type": "button",
 			"order": 5
 		},
+		"/input/y": {
+			"type": "button",
+			"order": 6
+		},
+		"/input/application_menu": {
+			"type": "button",
+			"order": 7
+		},
 		"/input/joystick": {
 			"type": "joystick",
-			"order": 6
+			"order": 8
 		},
 		"/output/haptic": {
 			"type": "vibration",
-			"order": 7
+			"order": 9
 		}
 	},
 	"default_bindings": []

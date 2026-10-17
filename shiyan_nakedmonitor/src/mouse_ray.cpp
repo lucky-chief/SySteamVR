@@ -4,7 +4,7 @@
 #include "driverlog.h"
 #include "eye_tracker.h"
 #include "quat_utils.h"
-#include "virtual_head.h"
+#include "vr_sim.h"
 
 #include <algorithm>
 #include <chrono>
@@ -341,9 +341,9 @@ bool ComputeAimPose( float outPosition[ 3 ], float outOrientation[ 4 ] )
 	float eyeRight[ 3 ] = {};
 	EyeTracker::GetCurrentEyes( eyeLeft, eyeRight );
 	float walkOffset[ 3 ] = {};
-	VirtualHead::GetPositionOffset( walkOffset );
+	VrSim::GetHeadOffset( walkOffset );
 	float headQuat[ 4 ] = { 0.0f, 0.0f, 0.0f, 1.0f };
-	VirtualHead::GetOrientation( headQuat );
+	VrSim::GetHeadOrientation( headQuat );
 
 	const float eyeMid[ 3 ] = {
 		( eyeLeft[ 0 ] + eyeRight[ 0 ] ) * 0.5f,
@@ -395,7 +395,7 @@ bool ComputeAimPose( float outPosition[ 3 ], float outOrientation[ 4 ] )
 	// Head orientation (for the diagnostics below).
 	float headYaw = 0.0f;
 	float headPitch = 0.0f;
-	VirtualHead::GetYawPitch( &headYaw, &headPitch );
+	VrSim::GetHeadYawPitch( &headYaw, &headPitch );
 
 	// Diagnostic (rate-limited): the reachable aim range is bounded by the
 	// aiming plane seen from the eye; log the angles so the sweep can be

@@ -19,7 +19,19 @@
 				},
 				{ "from": "/user/hand/right/input/a", "to": "/user/hand/right/input/a" },
 				{ "from": "/user/hand/right/input/b", "to": "/user/hand/right/input/b" },
-				{ "from": "/user/hand/right/input/thumbstick", "to": "/user/hand/right/input/joystick" }
+				{ "from": "/user/hand/right/input/thumbstick", "to": "/user/hand/right/input/joystick" },
+				{ "from": "/user/hand/left/input/trigger", "to": "/user/hand/left/input/trigger" },
+				{
+					"from": "/user/hand/left/input/grip",
+					"to": "/user/hand/left/input/grip",
+					"parameters": {
+						"click_activate_threshold": "0.2",
+						"click_deactivate_threshold": "0.1"
+					}
+				},
+				{ "from": "/user/hand/left/input/x", "to": "/user/hand/left/input/x" },
+				{ "from": "/user/hand/left/input/y", "to": "/user/hand/left/input/y" },
+				{ "from": "/user/hand/left/input/thumbstick", "to": "/user/hand/left/input/joystick" }
 			]
 		},
 		{
@@ -40,7 +52,19 @@
 				},
 				{ "from": "/user/hand/right/input/a", "to": "/user/hand/right/input/a" },
 				{ "from": "/user/hand/right/input/b", "to": "/user/hand/right/input/b" },
-				{ "from": "/user/hand/right/input/joystick", "to": "/user/hand/right/input/joystick" }
+				{ "from": "/user/hand/right/input/joystick", "to": "/user/hand/right/input/joystick" },
+				{ "from": "/user/hand/left/input/trigger", "to": "/user/hand/left/input/trigger" },
+				{
+					"from": "/user/hand/left/input/grip",
+					"to": "/user/hand/left/input/grip",
+					"parameters": {
+						"click_activate_threshold": "0.2",
+						"click_deactivate_threshold": "0.1"
+					}
+				},
+				{ "from": "/user/hand/left/input/x", "to": "/user/hand/left/input/x" },
+				{ "from": "/user/hand/left/input/y", "to": "/user/hand/left/input/y" },
+				{ "from": "/user/hand/left/input/joystick", "to": "/user/hand/left/input/joystick" }
 			]
 		},
 		{
@@ -59,7 +83,17 @@
 						"click_deactivate_threshold": "0.1"
 					}
 				},
-				{ "from": "/user/hand/right/input/joystick", "to": "/user/hand/right/input/joystick" }
+				{ "from": "/user/hand/right/input/joystick", "to": "/user/hand/right/input/joystick" },
+				{ "from": "/user/hand/left/input/trigger", "to": "/user/hand/left/input/trigger" },
+				{
+					"from": "/user/hand/left/input/grip",
+					"to": "/user/hand/left/input/grip",
+					"parameters": {
+						"click_activate_threshold": "0.2",
+						"click_deactivate_threshold": "0.1"
+					}
+				},
+				{ "from": "/user/hand/left/input/joystick", "to": "/user/hand/left/input/joystick" }
 			]
 		},
 		{
@@ -79,7 +113,18 @@
 					}
 				},
 				{ "from": "/user/hand/right/input/trackpad", "to": "/user/hand/right/input/joystick" },
-				{ "from": "/user/hand/right/input/application_menu", "to": "/user/hand/right/input/application_menu" }
+				{ "from": "/user/hand/right/input/application_menu", "to": "/user/hand/right/input/application_menu" },
+				{ "from": "/user/hand/left/input/trigger", "to": "/user/hand/left/input/trigger" },
+				{
+					"from": "/user/hand/left/input/grip",
+					"to": "/user/hand/left/input/grip",
+					"parameters": {
+						"click_activate_threshold": "0.2",
+						"click_deactivate_threshold": "0.1"
+					}
+				},
+				{ "from": "/user/hand/left/input/trackpad", "to": "/user/hand/left/input/joystick" },
+				{ "from": "/user/hand/left/input/application_menu", "to": "/user/hand/left/input/application_menu" }
 			]
 		},
 		{
@@ -90,7 +135,9 @@
 			"simulate_HMD": false,
 			"autoremappings": [
 				{ "from": "/user/hand/right/input/select", "to": "/user/hand/right/input/trigger" },
-				{ "from": "/user/hand/right/input/menu", "to": "/user/hand/right/input/application_menu" }
+				{ "from": "/user/hand/right/input/menu", "to": "/user/hand/right/input/application_menu" },
+				{ "from": "/user/hand/left/input/select", "to": "/user/hand/left/input/trigger" },
+				{ "from": "/user/hand/left/input/menu", "to": "/user/hand/left/input/application_menu" }
 			]
 		}
 	]

@@ -120,6 +120,7 @@ public:
 	void Deactivate() override;
 
 	const std::string &GetSerialNumber() const { return serial_number_; }
+	float GetSeatedHeightMeters() const { return seated_height_meters_; }
 
 	// Called by our IServerTrackedDeviceProvider every frame.
 	void UpdatePose();

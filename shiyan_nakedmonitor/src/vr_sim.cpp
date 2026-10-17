@@ -1,0 +1,603 @@
+//============ Shiyan Naked Monitor OpenVR driver ============
+#include "vr_sim.h"
+
+#include "driverlog.h"
+#include "mouse_ray.h"
+#include "quat_utils.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <string>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+static const char *kSimSection = "shiyan_nakedmonitor_controller";
+
+// Reference values from SyOpenXRRuntime/src/xr_input.cpp.
+static constexpr float kHeadMaxYaw = 2.618f;   // +-150 deg
+static constexpr float kHeadMaxPitch = 1.309f; // +-75 deg
+static constexpr float kHandMaxYaw = 2.0f;     // +-~115 deg
+static constexpr float kHandMaxPitch = 1.0f;   // +-~57 deg
+
+static constexpr float kHeadMoveSpeed = 0.8f; // m/s
+static constexpr float kHandMoveSpeed = 0.6f; // m/s
+static constexpr float kWheelMoveStep = 0.1f; // m per notch (hand target)
+static constexpr float kMouseTranslateMetersPerScreen = 2.0f;
+static constexpr float kWheelStickPulseSeconds = 0.15f;
+
+static constexpr float kHandResetDistance = 1.0f;
+static constexpr float kHandResetHalfSpacing = 0.25f;
+
+static constexpr float kCursorRecenterMargin = 0.1f;
+
+static float GetFloatSetting( const char *pchKey, float flDefault )
+{
+	vr::EVRSettingsError error = vr::VRSettingsError_None;
+	const float value = vr::VRSettings()->GetFloat( kSimSection, pchKey, &error );
+	return ( error == vr::VRSettingsError_None ) ? value : flDefault;
+}
+
+static bool GetBoolSetting( const char *pchKey, bool bDefault )
+{
+	vr::EVRSettingsError error = vr::VRSettingsError_None;
+	const bool value = vr::VRSettings()->GetBool( kSimSection, pchKey, &error );
+	return ( error == vr::VRSettingsError_None ) ? value : bDefault;
+}
+
+static void GetStringSetting( const char *pchKey, const char *pchDefault, std::string &out )
+{
+	char buffer[ 1024 ] = {};
+	vr::EVRSettingsError error = vr::VRSettingsError_None;
+	vr::VRSettings()->GetString( kSimSection, pchKey, buffer, sizeof( buffer ), &error );
+	out = ( error == vr::VRSettingsError_None ) ? buffer : pchDefault;
+}
+
+namespace
+{
+
+struct SimState
+{
+	bool initialized = false;
+
+	bool natural_mouse = false;
+	VrSim::Target target = VrSim::Target::Head;
+
+	// Head (walk offset on top of the seated base).
+	float head_yaw = 0.0f;
+	float head_pitch = 0.0f;
+	float head_offset[ 3 ] = {};
+
+	// Hands: absolute in tracking space, relative to the seated base on y.
+	float hand_yaw[ 2 ] = { 0.0f, 0.0f };
+	float hand_pitch[ 2 ] = { 0.0f, 0.0f };
+	float hand_pos[ 2 ][ 3 ] = { { -kHandResetHalfSpacing, -0.25f, -0.35f },
+		{ kHandResetHalfSpacing, -0.25f, -0.35f } };
+
+	VrSim::HandInput hand_input[ 2 ];
+
+	bool mouse_translate = false;
+	bool cursor_recenter = true;
+	bool wheel_invert = false;
+	bool head_look_invert = true;
+
+	float head_look_gain = 1.0f;
+	float head_move_gain = 1.0f;
+	float hand_look_gain = 1.0f;
+	float hand_move_gain = 1.0f;
+
+	int primary_hand = 1; // natural_mouse: buttons go here (0 = left, 1 = right)
+
+	float wheel_stick_seconds = 0.0f;
+	float wheel_stick_sign = 0.0f;
+
+	// Edge detection.
+	bool last_g = false;
+	bool last_1 = false;
+	bool last_2 = false;
+	bool last_3 = false;
+	bool last_tab = false;
+	bool last_f = false;
+	bool last_z = false;
+	bool target_logged = false;
+
+	// SetCursorPos after an edge recenter synthesizes mouse movement that raw
+	// input also sees; swallow it for a couple of frames.
+	int swallow_frames = 0;
+
+	std::chrono::steady_clock::time_point last_time{};
+};
+
+SimState g_sim;
+float g_head_base_height = 1.5f;
+
+void RecenterCursorIfNearEdge()
+{
+	const int screenW = GetSystemMetrics( SM_CXSCREEN );
+	const int screenH = GetSystemMetrics( SM_CYSCREEN );
+	if ( screenW <= 0 || screenH <= 0 )
+	{
+		return;
+	}
+
+	POINT cursor = {};
+	if ( !GetCursorPos( &cursor ) )
+	{
+		return;
+	}
+
+	const float marginX = static_cast< float >( screenW ) * kCursorRecenterMargin;
+	const float marginY = static_cast< float >( screenH ) * kCursorRecenterMargin;
+	if ( static_cast< float >( cursor.x ) < marginX
+		 || static_cast< float >( cursor.x ) > static_cast< float >( screenW ) - marginX
+		 || static_cast< float >( cursor.y ) < marginY
+		 || static_cast< float >( cursor.y ) > static_cast< float >( screenH ) - marginY )
+	{
+		if ( SetCursorPos( screenW / 2, screenH / 2 ) )
+		{
+			g_sim.swallow_frames = 2;
+		}
+	}
+}
+
+// Move `position` horizontally in the head's yaw plane (view space).
+void MoveInViewSpace( float position[ 3 ], float headYaw, float step,
+	bool forward, bool back, bool right, bool left )
+{
+	const float sinYaw = std::sin( headYaw );
+	const float cosYaw = std::cos( headYaw );
+	const float forwardX = -sinYaw;
+	const float forwardZ = -cosYaw;
+	const float rightX = cosYaw;
+	const float rightZ = -sinYaw;
+
+	if ( forward )
+	{
+		position[ 0 ] += forwardX * step;
+		position[ 2 ] += forwardZ * step;
+	}
+	if ( back )
+	{
+		position[ 0 ] -= forwardX * step;
+		position[ 2 ] -= forwardZ * step;
+	}
+	if ( right )
+	{
+		position[ 0 ] += rightX * step;
+		position[ 2 ] += rightZ * step;
+	}
+	if ( left )
+	{
+		position[ 0 ] -= rightX * step;
+		position[ 2 ] -= rightZ * step;
+	}
+}
+
+} // namespace
+
+namespace VrSim
+{
+
+const char *TargetName( Target target )
+{
+	switch ( target )
+	{
+	case Target::LeftHand: return "left hand";
+	case Target::RightHand: return "right hand";
+	default: return "head";
+	}
+}
+
+void Init()
+{
+	if ( g_sim.initialized )
+	{
+		return;
+	}
+	g_sim.initialized = true;
+
+	std::string mode;
+	GetStringSetting( "interaction_mode", "vr_sim", mode );
+	g_sim.natural_mouse = ( mode == "natural_mouse" );
+
+	std::string primary;
+	GetStringSetting( "primary_hand", "right", primary );
+	g_sim.primary_hand = ( primary == "left" ) ? 0 : 1;
+
+	g_sim.cursor_recenter = GetBoolSetting( "cursor_recenter", g_sim.cursor_recenter );
+	g_sim.wheel_invert = GetBoolSetting( "wheel_invert", g_sim.wheel_invert );
+	g_sim.head_look_invert = GetBoolSetting( "head_look_invert", g_sim.head_look_invert );
+
+	g_sim.head_look_gain = GetFloatSetting( "sim_head_look", g_sim.head_look_gain );
+	g_sim.head_move_gain = GetFloatSetting( "sim_head_move", g_sim.head_move_gain );
+	g_sim.hand_look_gain = GetFloatSetting( "sim_hand_look", g_sim.hand_look_gain );
+	g_sim.hand_move_gain = GetFloatSetting( "sim_hand_move", g_sim.hand_move_gain );
+
+	// Initial orientation (degrees), useful for aiming presets / testing.
+	const float yawDeg = GetFloatSetting( "head_yaw_deg", 0.0f );
+	const float pitchDeg = GetFloatSetting( "head_pitch_deg", 0.0f );
+	g_sim.head_yaw = yawDeg * 0.0174532925f;
+	g_sim.head_pitch = pitchDeg * 0.0174532925f;
+
+	DriverLog( "shiyan_nakedmonitor: input sim (mode %s; target %s; primary hand %s).",
+		g_sim.natural_mouse ? "natural_mouse" : "vr_sim",
+		TargetName( g_sim.target ), g_sim.primary_hand == 0 ? "left" : "right" );
+}
+
+void SetHeadBaseHeight( float meters )
+{
+	g_head_base_height = meters;
+}
+
+void Update( RawInput::State &input )
+{
+	if ( !g_sim.initialized )
+	{
+		Init();
+	}
+	if ( g_sim.swallow_frames > 0 )
+	{
+		--g_sim.swallow_frames;
+		input.dx = 0;
+		input.dy = 0;
+	}
+
+	const auto now = std::chrono::steady_clock::now();
+	float dt = 0.0f;
+	if ( g_sim.last_time != std::chrono::steady_clock::time_point{} )
+	{
+		dt = std::chrono::duration_cast< std::chrono::duration< float > >( now - g_sim.last_time ).count();
+		dt = std::max( 0.0f, std::min( dt, 0.1f ) );
+	}
+	g_sim.last_time = now;
+
+	// --- G: toggle interaction mode ---------------------------------------
+	const bool g_down = input.keys[ 'G' ];
+	if ( g_down && !g_sim.last_g )
+	{
+		g_sim.natural_mouse = !g_sim.natural_mouse;
+		DriverLog( "shiyan_nakedmonitor: interaction mode -> %s",
+			g_sim.natural_mouse ? "natural_mouse (cursor = panel pointer)"
+								 : "vr_sim (mouse aims the active target)" );
+	}
+	g_sim.last_g = g_down;
+
+	// --- 1/2/3 + Tab: active target (vr_sim only) --------------------------
+	const bool one = input.keys[ '1' ];
+	const bool two = input.keys[ '2' ];
+	const bool three = input.keys[ '3' ];
+	const bool tab = input.keys[ VK_TAB ];
+	if ( !g_sim.natural_mouse )
+	{
+		if ( one && !g_sim.last_1 )
+		{
+			g_sim.target = Target::Head;
+		}
+		if ( two && !g_sim.last_2 )
+		{
+			g_sim.target = Target::LeftHand;
+		}
+		if ( three && !g_sim.last_3 )
+		{
+			g_sim.target = Target::RightHand;
+		}
+		if ( tab && !g_sim.last_tab )
+		{
+			g_sim.target = ( g_sim.target == Target::Head ) ? Target::LeftHand
+				: ( g_sim.target == Target::LeftHand )  ? Target::RightHand
+														: Target::Head;
+		}
+	}
+	g_sim.last_1 = one;
+	g_sim.last_2 = two;
+	g_sim.last_3 = three;
+	g_sim.last_tab = tab;
+
+	if ( !g_sim.target_logged )
+	{
+		g_sim.target_logged = true;
+		DriverLog( "shiyan_nakedmonitor: sim target = %s (1/2/3 = head/left/right, Tab cycles).",
+			TargetName( g_sim.target ) );
+	}
+	else
+	{
+		static Target s_lastTarget = Target::Head;
+		if ( s_lastTarget != g_sim.target )
+		{
+			s_lastTarget = g_sim.target;
+			DriverLog( "shiyan_nakedmonitor: sim target = %s.",
+				TargetName( g_sim.target ) );
+		}
+	}
+
+	// --- cursor + deltas ---------------------------------------------------
+	POINT cursor = {};
+	GetCursorPos( &cursor );
+	const float screenW = static_cast< float >( std::max( 1, GetSystemMetrics( SM_CXSCREEN ) ) );
+	const float screenH = static_cast< float >( std::max( 1, GetSystemMetrics( SM_CYSCREEN ) ) );
+	const float normalizedX = ( static_cast< float >( cursor.x ) / screenW ) * 2.0f - 1.0f;
+	const float normalizedY = ( static_cast< float >( cursor.y ) / screenH ) * 2.0f - 1.0f;
+
+	// --- F: mouse-translate mode -------------------------------------------
+	const bool f_down = input.keys[ 'F' ];
+	if ( f_down && !g_sim.last_f )
+	{
+		g_sim.mouse_translate = !g_sim.mouse_translate;
+		DriverLog( "shiyan_nakedmonitor: mouse translate mode %s (F)",
+			g_sim.mouse_translate ? "ON" : "OFF" );
+	}
+	g_sim.last_f = f_down;
+
+	float mouse_move_right = 0.0f;
+	float mouse_move_up = 0.0f;
+	if ( g_sim.mouse_translate )
+	{
+		const float metersPerPixel = kMouseTranslateMetersPerScreen / screenW;
+		mouse_move_right = static_cast< float >( input.dx ) * metersPerPixel;
+		mouse_move_up = -static_cast< float >( input.dy ) * metersPerPixel;
+	}
+
+	// --- keys --------------------------------------------------------------
+	const bool movingForward = input.keys[ 'W' ];
+	const bool movingBack = input.keys[ 'S' ];
+	const bool movingRight = input.keys[ 'D' ];
+	const bool movingLeft = input.keys[ 'A' ];
+	const bool movingDown = input.keys[ 'Q' ];
+	const bool movingUp = input.keys[ 'E' ];
+	const float speedScale = input.keys[ VK_SHIFT ] ? 3.0f : 1.0f;
+
+	const bool select = input.left;
+	const bool squeeze = input.right;
+	const bool menu = input.keys[ 'M' ];
+	const bool headLookModifier = input.middle;
+
+	const bool stickClick = input.keys[ 'R' ]
+		&& !( input.keys[ VK_CONTROL ] && input.keys[ VK_MENU ] );
+	const bool facePrimary = input.keys[ 'X' ];
+	const bool faceSecondary = input.keys[ 'C' ];
+
+	const bool headIsTarget = ( g_sim.target == Target::Head );
+
+	// --- head look (incremental) ------------------------------------------
+	// vr_sim with the head as target, or MMB held while a hand is targeted.
+	if ( !g_sim.mouse_translate && ( headLookModifier || ( !g_sim.natural_mouse && headIsTarget ) ) )
+	{
+		const float sensitivity = ( kHeadMaxYaw / ( screenW * 0.5f ) ) * g_sim.head_look_gain;
+		const float sign = g_sim.head_look_invert ? 1.0f : -1.0f;
+		g_sim.head_yaw += sign * static_cast< float >( input.dx ) * sensitivity;
+		g_sim.head_pitch += sign * static_cast< float >( input.dy ) * sensitivity;
+		g_sim.head_pitch = std::max( -kHeadMaxPitch, std::min( kHeadMaxPitch, g_sim.head_pitch ) );
+		while ( g_sim.head_yaw > 3.14159265f )
+		{
+			g_sim.head_yaw -= 2.0f * 3.14159265f;
+		}
+		while ( g_sim.head_yaw < -3.14159265f )
+		{
+			g_sim.head_yaw += 2.0f * 3.14159265f;
+		}
+
+		if ( g_sim.cursor_recenter )
+		{
+			RecenterCursorIfNearEdge();
+		}
+		input.dx = 0;
+		input.dy = 0;
+	}
+
+	// --- active hand absolute aim -----------------------------------------
+	if ( !g_sim.natural_mouse && !headIsTarget && !g_sim.mouse_translate && !headLookModifier )
+	{
+		const int hand = ( g_sim.target == Target::LeftHand ) ? 0 : 1;
+		g_sim.hand_yaw[ hand ] = -normalizedX * kHandMaxYaw * g_sim.hand_look_gain;
+		g_sim.hand_pitch[ hand ] = -normalizedY * kHandMaxPitch * g_sim.hand_look_gain;
+	}
+
+	// --- Z: reset both hands in front of the head -------------------------
+	const bool z_down = input.keys[ 'Z' ];
+	if ( z_down && !g_sim.last_z )
+	{
+		float headQuat[ 4 ] = {};
+		Quat::FromYawPitch( g_sim.head_yaw, g_sim.head_pitch, headQuat );
+		const float forwardIn[ 3 ] = { 0.0f, 0.0f, -1.0f };
+		const float rightIn[ 3 ] = { 1.0f, 0.0f, 0.0f };
+		float forward[ 3 ] = {};
+		float right[ 3 ] = {};
+		Quat::RotateVector( headQuat, forwardIn, forward );
+		Quat::RotateVector( headQuat, rightIn, right );
+
+		const float headY = g_sim.head_offset[ 1 ];
+		for ( int hand = 0; hand < 2; ++hand )
+		{
+			const float side = ( hand == 0 ) ? -kHandResetHalfSpacing : kHandResetHalfSpacing;
+			g_sim.hand_pos[ hand ][ 0 ] = g_sim.head_offset[ 0 ] + forward[ 0 ] * kHandResetDistance + right[ 0 ] * side;
+			g_sim.hand_pos[ hand ][ 1 ] = headY + forward[ 1 ] * kHandResetDistance + right[ 1 ] * side;
+			g_sim.hand_pos[ hand ][ 2 ] = g_sim.head_offset[ 2 ] + forward[ 2 ] * kHandResetDistance + right[ 2 ] * side;
+			g_sim.hand_yaw[ hand ] = g_sim.head_yaw;
+			g_sim.hand_pitch[ hand ] = g_sim.head_pitch;
+		}
+		DriverLog( "shiyan_nakedmonitor: Z reset both hands to %.2fm in front of the head.", kHandResetDistance );
+	}
+	g_sim.last_z = z_down;
+
+	// --- movement of the active target ------------------------------------
+	auto applyMouseTranslate = [&]( float position[ 3 ] ) {
+		if ( mouse_move_right != 0.0f )
+		{
+			// Lateral move in view space (A/D); reuse the yaw-plane right vector.
+			position[ 0 ] += std::cos( g_sim.head_yaw ) * mouse_move_right;
+			position[ 2 ] += -std::sin( g_sim.head_yaw ) * mouse_move_right;
+		}
+		if ( mouse_move_up != 0.0f )
+		{
+			position[ 1 ] += mouse_move_up;
+		}
+	};
+
+	if ( g_sim.natural_mouse || headIsTarget )
+	{
+		const float step = kHeadMoveSpeed * g_sim.head_move_gain * speedScale * dt;
+		MoveInViewSpace( g_sim.head_offset, g_sim.head_yaw, step, movingForward, movingBack,
+			movingRight, movingLeft );
+		if ( movingDown )
+		{
+			g_sim.head_offset[ 1 ] -= step;
+		}
+		if ( movingUp )
+		{
+			g_sim.head_offset[ 1 ] += step;
+		}
+		applyMouseTranslate( g_sim.head_offset );
+	}
+	else
+	{
+		const int hand = ( g_sim.target == Target::LeftHand ) ? 0 : 1;
+		const float step = kHandMoveSpeed * g_sim.hand_move_gain * speedScale * dt;
+		MoveInViewSpace( g_sim.hand_pos[ hand ], g_sim.head_yaw, step, movingForward, movingBack,
+			movingRight, movingLeft );
+		if ( movingDown )
+		{
+			g_sim.hand_pos[ hand ][ 1 ] -= step;
+		}
+		if ( movingUp )
+		{
+			g_sim.hand_pos[ hand ][ 1 ] += step;
+		}
+		applyMouseTranslate( g_sim.hand_pos[ hand ] );
+
+		// Wheel = W/S for the active hand (0.1 m per notch).
+		if ( input.wheel != 0 )
+		{
+			const float sign = g_sim.wheel_invert ? -1.0f : 1.0f;
+			const float distance = static_cast< float >( input.wheel ) * kWheelMoveStep * g_sim.hand_move_gain * sign;
+			MoveInViewSpace( g_sim.hand_pos[ hand ], g_sim.head_yaw, std::fabs( distance ),
+				distance > 0.0f, distance < 0.0f, false, false );
+		}
+	}
+
+	// --- thumbstick (arrows) + natural_mouse wheel pulse -------------------
+	float thumbstickX = ( input.keys[ VK_RIGHT ] ? 1.0f : 0.0f ) - ( input.keys[ VK_LEFT ] ? 1.0f : 0.0f );
+	float thumbstickY = ( input.keys[ VK_UP ] ? 1.0f : 0.0f ) - ( input.keys[ VK_DOWN ] ? 1.0f : 0.0f );
+	if ( g_sim.natural_mouse )
+	{
+		if ( input.wheel != 0 )
+		{
+			g_sim.wheel_stick_seconds = kWheelStickPulseSeconds;
+			const float dir = ( input.wheel > 0 ) ? 1.0f : -1.0f;
+			g_sim.wheel_stick_sign = dir * ( g_sim.wheel_invert ? -1.0f : 1.0f );
+		}
+		else if ( g_sim.wheel_stick_seconds > 0.0f )
+		{
+			g_sim.wheel_stick_seconds = std::max( 0.0f, g_sim.wheel_stick_seconds - dt );
+		}
+		if ( g_sim.wheel_stick_seconds > 0.0f && thumbstickY == 0.0f )
+		{
+			thumbstickY = g_sim.wheel_stick_sign;
+		}
+	}
+
+	// --- route buttons to a hand ------------------------------------------
+	const int buttonHand = g_sim.natural_mouse ? g_sim.primary_hand
+		: ( g_sim.target == Target::LeftHand )  ? 0
+		: ( g_sim.target == Target::RightHand ) ? 1
+												: -1;
+	const int menuHand = ( buttonHand >= 0 ) ? buttonHand : g_sim.primary_hand;
+
+	for ( int hand = 0; hand < 2; ++hand )
+	{
+		HandInput &out = g_sim.hand_input[ hand ];
+		out = HandInput{};
+		const bool isActive = ( hand == buttonHand );
+		out.trigger = isActive && select ? 1.0f : 0.0f;
+		out.triggerClick = isActive && select;
+		out.grip = isActive && squeeze ? 1.0f : 0.0f;
+		out.gripClick = isActive && squeeze;
+		out.facePrimary = isActive && facePrimary;
+		out.faceSecondary = isActive && faceSecondary;
+		out.menu = ( hand == menuHand ) && menu;
+		out.thumbstickX = isActive ? thumbstickX : 0.0f;
+		out.thumbstickY = isActive ? thumbstickY : 0.0f;
+		out.thumbstickClick = isActive && stickClick;
+	}
+}
+
+bool IsNaturalMouse()
+{
+	return g_sim.natural_mouse;
+}
+
+Target GetTarget()
+{
+	return g_sim.target;
+}
+
+void GetHeadYawPitch( float *outYaw, float *outPitch )
+{
+	if ( outYaw != nullptr )
+	{
+		*outYaw = g_sim.head_yaw;
+	}
+	if ( outPitch != nullptr )
+	{
+		*outPitch = g_sim.head_pitch;
+	}
+}
+
+void GetHeadOffset( float out[ 3 ] )
+{
+	if ( out != nullptr )
+	{
+		out[ 0 ] = g_sim.head_offset[ 0 ];
+		out[ 1 ] = g_sim.head_offset[ 1 ];
+		out[ 2 ] = g_sim.head_offset[ 2 ];
+	}
+}
+
+void GetHeadOrientation( float outQuat[ 4 ] )
+{
+	if ( outQuat != nullptr )
+	{
+		Quat::FromYawPitch( g_sim.head_yaw, g_sim.head_pitch, outQuat );
+	}
+}
+
+void GetControllerPose( int hand, float outPosition[ 3 ], float outOrientation[ 4 ] )
+{
+	const int idx = ( hand == 0 ) ? 0 : 1;
+
+	if ( g_sim.natural_mouse )
+	{
+		float rayPos[ 3 ] = {};
+		float rayQuat[ 4 ] = {};
+		if ( MouseRay::ComputeAimPose( rayPos, rayQuat ) )
+		{
+			for ( int i = 0; i < 3; ++i )
+			{
+				outPosition[ i ] = rayPos[ i ];
+			}
+			for ( int i = 0; i < 4; ++i )
+			{
+				outOrientation[ i ] = rayQuat[ i ];
+			}
+			return;
+		}
+	}
+
+	outPosition[ 0 ] = g_sim.hand_pos[ idx ][ 0 ];
+	outPosition[ 1 ] = g_head_base_height + g_sim.hand_pos[ idx ][ 1 ];
+	outPosition[ 2 ] = g_sim.hand_pos[ idx ][ 2 ];
+	Quat::FromYawPitch( g_sim.hand_yaw[ idx ], g_sim.hand_pitch[ idx ], outOrientation );
+}
+
+void GetHandInput( int hand, HandInput *out )
+{
+	if ( out == nullptr )
+	{
+		return;
+	}
+	*out = g_sim.hand_input[ ( hand == 0 ) ? 0 : 1 ];
+}
+
+} // namespace VrSim

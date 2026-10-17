@@ -211,7 +211,33 @@ Limitations of the current skeleton:
   and rebuilt on the next call (the compositor's swap textures are *not*
   recreated - a known gap).
 
+## Virtual controllers (keyboard + mouse)
+
+Two `TrackedDevice_Controller` devices (left/right) are driven by a global
+keyboard/mouse capture. `VrSim` (`src/vr_sim.cpp`) owns the simulated head and
+both hands plus an "active target", ported from SyOpenXRRuntime's `vr_sim`:
+
+* **vr_sim** (target based):
+  * `1` / `2` / `3` activate **head / left hand / right hand**, `Tab` cycles;
+  * the mouse aims the **active hand absolutely**; with the head as the target
+    it turns the head incrementally (holding MMB does the same while a hand is
+    active);
+  * `WASD` / `QE` move the **active target** in view space, `Shift` = 3x;
+  * `F` toggles mouse-translate mode (mouse moves the target sideways/up-down);
+  * `Z` resets both hands to 1 m in front of the head;
+  * wheel moves the active hand forward/back (0.1 m per notch).
+* **natural_mouse** (`G` toggles): the mouse is a panel pointer, both hands aim
+  along the eye -> cursor ray, `WASD` walks the head.
+* Buttons in both modes: LMB = select/trigger, RMB = squeeze/grip, `M` = menu,
+  `X` / `C` = face primary/secondary (left X/Y, right A/B), `R` = thumbstick
+  click, arrow keys = thumbstick, wheel = thumbstick in natural_mouse.
+* `H` shows/hides the OS pointer over the direct-mode output window.
+
+Tunables live in `shiyan_nakedmonitor_controller`: `interaction_mode`,
+`primary_hand`, `head_look_invert`, `sim_head_look`, `sim_head_move`,
+`sim_hand_look`, `sim_hand_move`, `cursor_recenter`, `ray_origin_*`, ...
+
 ## Not yet implemented
 
-* Head/eye tracking (currently a fixed viewpoint).
-* Motion controllers (only gamepad/keyboard-friendly seated games work for now).
+* Real six-DoF tracking (the pose is simulated from keyboard/mouse).
+* Physical controllers (both hands are virtual devices).

@@ -4,7 +4,7 @@
 #include "driverlog.h"
 #include "eye_tracker.h"
 #include "quat_utils.h"
-#include "virtual_head.h"
+#include "vr_sim.h"
 
 #include <algorithm>
 #include <cctype>
@@ -802,16 +802,16 @@ vr::DriverPose_t NakedHMDDeviceDriver::GetPose()
 	pose.qWorldFromDriverRotation.w = 1.0;
 	pose.qDriverFromHeadRotation.w = 1.0;
 
-	// Virtual head (MMB look + WASD walk, see virtual_head.h).
+	// Virtual head (see vr_sim.h: mouse look + WASD walk).
 	float headQuat[ 4 ] = { 0.0f, 0.0f, 0.0f, 1.0f };
-	VirtualHead::GetOrientation( headQuat );
+	VrSim::GetHeadOrientation( headQuat );
 	pose.qRotation.x = headQuat[ 0 ];
 	pose.qRotation.y = headQuat[ 1 ];
 	pose.qRotation.z = headQuat[ 2 ];
 	pose.qRotation.w = headQuat[ 3 ];
 
 	float walkOffset[ 3 ] = {};
-	VirtualHead::GetPositionOffset( walkOffset );
+	VrSim::GetHeadOffset( walkOffset );
 
 	// --- Rotation pivot: the tracked eye midpoint -------------------------
 	// The compositor places each virtual eye at  headPose * eyeToHead, and

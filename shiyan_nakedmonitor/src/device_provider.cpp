@@ -5,7 +5,7 @@
 #include "eye_tracker.h"
 #include "ime_switch.h"
 #include "raw_input.h"
-#include "virtual_head.h"
+#include "vr_sim.h"
 
 static bool GetBoolSetting( const char *pchSection, const char *pchKey, bool bDefault )
 {
@@ -35,26 +35,42 @@ vr::EVRInitError NakedDeviceProvider::Init( vr::IVRDriverContext *pDriverContext
 
 	DriverLog( "shiyan_nakedmonitor: HMD device added." );
 
-	// --- Virtual keyboard/mouse controller (right hand) --------------------
+	// The input simulator places the hands relative to the seated base height.
+	VrSim::SetHeadBaseHeight( hmd_device_->GetSeatedHeightMeters() );
+	VrSim::Init();
+
+	// --- Virtual keyboard/mouse controllers (left + right hand) -----------
 	if ( GetBoolSetting( "shiyan_nakedmonitor_controller", "enabled", true ) )
 	{
 		raw_input_started_ = RawInput::Start();
 		if ( !raw_input_started_ )
 		{
 			DriverLog( "shiyan_nakedmonitor: WARNING - raw input capture failed to start; "
-					   "controller will idle with no key/mouse data." );
+					   "controllers will idle with no key/mouse data." );
 		}
 
-		controller_ = std::make_unique< ShiyanNakedController >();
+		controller_left_ = std::make_unique< ShiyanNakedController >( 0 );
 		if ( !vr::VRServerDriverHost()->TrackedDeviceAdded(
-				controller_->GetSerialNumber().c_str(), vr::TrackedDeviceClass_Controller, controller_.get() ) )
+				controller_left_->GetSerialNumber().c_str(), vr::TrackedDeviceClass_Controller, controller_left_.get() ) )
 		{
-			DriverLog( "shiyan_nakedmonitor: failed to add virtual controller device." );
-			controller_ = nullptr;
+			DriverLog( "shiyan_nakedmonitor: failed to add left controller device." );
+			controller_left_ = nullptr;
 		}
 		else
 		{
-			DriverLog( "shiyan_nakedmonitor: virtual controller device added." );
+			DriverLog( "shiyan_nakedmonitor: left controller device added." );
+		}
+
+		controller_right_ = std::make_unique< ShiyanNakedController >( 1 );
+		if ( !vr::VRServerDriverHost()->TrackedDeviceAdded(
+				controller_right_->GetSerialNumber().c_str(), vr::TrackedDeviceClass_Controller, controller_right_.get() ) )
+		{
+			DriverLog( "shiyan_nakedmonitor: failed to add right controller device." );
+			controller_right_ = nullptr;
+		}
+		else
+		{
+			DriverLog( "shiyan_nakedmonitor: right controller device added." );
 		}
 	}
 
@@ -77,11 +93,10 @@ void NakedDeviceProvider::RunFrame()
 	// SDK panel size, reads eye positions and eases the fallback blend.
 	EyeTracker::Pump();
 
-	// Keyboard/mouse snapshot. VirtualHead consumes what belongs to the head
-	// (G toggle, MMB look, WASD walk) and zeroes the mouse deltas it took, so
-	// the controller only sees what is still unconsumed.
+	// Keyboard/mouse snapshot. VrSim routes it to the simulated head/hands and
+	// zeroes the mouse deltas it consumed.
 	RawInput::State input = RawInput::Consume();
-	VirtualHead::Update( input );
+	VrSim::Update( input );
 
 	// H (edge-triggered): show/hide the OS pointer over the direct-mode output.
 	const bool h_down = input.keys[ 'H' ];
@@ -107,19 +122,27 @@ void NakedDeviceProvider::RunFrame()
 		hmd_device_->EnforceWindowPlacement();
 	}
 
-	// --- Virtual controller: feed the remaining keyboard/mouse snapshot -----
-	if ( controller_ != nullptr )
+	// --- Virtual controllers: pull this frame's routed hand state ----------
+	if ( controller_left_ != nullptr )
 	{
-		controller_->RunFrame( input );
+		controller_left_->RunFrame();
+	}
+	if ( controller_right_ != nullptr )
+	{
+		controller_right_->RunFrame();
 	}
 
-	// Drain the event queue (haptics go to the controller) so it does not back up.
+	// Drain the event queue (haptics go to the controllers) so it does not back up.
 	vr::VREvent_t event = {};
 	while ( vr::VRServerDriverHost()->PollNextEvent( &event, sizeof( vr::VREvent_t ) ) )
 	{
-		if ( controller_ != nullptr )
+		if ( controller_left_ != nullptr )
 		{
-			controller_->ProcessEvent( event );
+			controller_left_->ProcessEvent( event );
+		}
+		if ( controller_right_ != nullptr )
+		{
+			controller_right_->ProcessEvent( event );
 		}
 	}
 }
@@ -134,7 +157,8 @@ void NakedDeviceProvider::LeaveStandby()
 
 void NakedDeviceProvider::Cleanup()
 {
-	controller_ = nullptr;
+	controller_left_ = nullptr;
+	controller_right_ = nullptr;
 	hmd_device_ = nullptr;
 
 	// Stop the raw-input capture thread before vrserver tears the context down.
