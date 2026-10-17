@@ -116,12 +116,12 @@ void NakedDeviceProvider::RunFrame()
 	// built-in gamepad bindings only cover a few SteamVR Home actions.
 	const GamepadInput::State pad = GamepadInput::Poll();
 
-	// Y = the keyboard's V (help overlay).
-	if ( pad.y && !prev_pad_y_ && hmd_device_ != nullptr )
+	// Back = keyboard V (help overlay); Y = keyboard G (interaction mode).
+	if ( pad.back && !prev_pad_back_ && hmd_device_ != nullptr )
 	{
 		hmd_device_->ToggleHelpOverlay();
 	}
-	prev_pad_y_ = pad.y;
+	prev_pad_back_ = pad.back;
 
 	VrSim::GamepadInput sim_pad;
 	sim_pad.connected = pad.connected;
@@ -133,18 +133,18 @@ void NakedDeviceProvider::RunFrame()
 	sim_pad.grip = pad.leftTrigger;      // LT
 	sim_pad.facePrimary = pad.a;
 	sim_pad.buttonB = pad.b;
-	sim_pad.menu = pad.start;
-	sim_pad.modeToggle = pad.leftStickClick;
+	sim_pad.system = pad.start;
+	sim_pad.modeToggle = pad.y;
 	sim_pad.reset = pad.rightStickClick;
-	sim_pad.lookModifier = pad.shoulderLeft; // LB
+	sim_pad.lookModifier = pad.shoulderLeft;  // LB
 	sim_pad.moveModifier = pad.shoulderRight; // RB
 	sim_pad.prevTarget = pad.dpadLeft;
 	sim_pad.nextTarget = pad.dpadRight;
 	sim_pad.thumbY = ( pad.dpadUp ? 1.0f : 0.0f ) - ( pad.dpadDown ? 1.0f : 0.0f );
-	VrSim::SetGamepad( sim_pad );
 
-	// Key-hint overlay: V shows/hides it; while visible, A/D or Left/Right page
-	// through the images and are withheld from the simulator (no movement).
+	// Key-hint overlay: V or Back shows/hides it; while visible, A/D,
+	// Left/Right, the d-pad or the left stick page through the images and are
+	// withheld from the simulator (no movement, no target switching).
 	const bool v_down = input.keys[ 'V' ];
 	if ( v_down && !prev_v_down_ && hmd_device_ != nullptr )
 	{
@@ -154,8 +154,10 @@ void NakedDeviceProvider::RunFrame()
 
 	if ( hmd_device_ != nullptr && hmd_device_->IsHelpVisible() )
 	{
-		const bool page_left = input.keys[ 'A' ] || input.keys[ VK_LEFT ];
-		const bool page_right = input.keys[ 'D' ] || input.keys[ VK_RIGHT ];
+		const bool stick_left = pad.connected && pad.leftX < -0.6f;
+		const bool stick_right = pad.connected && pad.leftX > 0.6f;
+		const bool page_left = input.keys[ 'A' ] || input.keys[ VK_LEFT ] || pad.dpadLeft || stick_left;
+		const bool page_right = input.keys[ 'D' ] || input.keys[ VK_RIGHT ] || pad.dpadRight || stick_right;
 		if ( page_left && !prev_help_left_ )
 		{
 			hmd_device_->NextHelpPage( -1 );
@@ -171,6 +173,11 @@ void NakedDeviceProvider::RunFrame()
 		input.keys[ 'D' ] = false;
 		input.keys[ VK_LEFT ] = false;
 		input.keys[ VK_RIGHT ] = false;
+
+		// Paging must not also move the target or switch it.
+		sim_pad.moveX = 0.0f;
+		sim_pad.prevTarget = false;
+		sim_pad.nextTarget = false;
 	}
 	else
 	{
@@ -178,6 +185,7 @@ void NakedDeviceProvider::RunFrame()
 		prev_help_right_ = false;
 	}
 
+	VrSim::SetGamepad( sim_pad );
 	VrSim::Update( input );
 
 	// H (edge-triggered): show/hide the OS pointer over the direct-mode output.

@@ -48,6 +48,7 @@ private:
 		Comp_FacePrimary,
 		Comp_FaceSecondary,
 		Comp_AppMenuClick,
+		Comp_SystemClick,
 		Comp_JoystickX,
 		Comp_JoystickY,
 		Comp_JoystickClick,

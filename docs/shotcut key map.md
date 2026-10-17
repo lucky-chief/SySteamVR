@@ -11,8 +11,8 @@
 
 | 键 | 功能 |
 |---|---|
-| `V` | 显示 / 隐藏按键提示图 |
-| `A` / `D` 或 `←` / `→` | **仅在提示图可见时**：上一页 / 下一页（循环）；此时这几个键不参与移动/摇杆 |
+| `V` | 显示 / 隐藏按键提示图（手柄 `Back` 同效） |
+| `A` / `D` 或 `←` / `→` | **仅在提示图可见时**：上一页 / 下一页（循环）；此时这几个键不参与移动/摇杆。手柄可用十字键 ← / → 或左摇杆左右翻页 |
 | `H` | 显示 / 隐藏系统鼠标指针（只作用于 direct mode 的输出窗口） |
 | `G` | 切换交互模式：vr_sim ⇄ natural_mouse（切换时双手自动重置到头部朝向） |
 
@@ -60,7 +60,7 @@
 | `C` | 面板副键（左手 `Y`、右手 `B`） |
 | `R` | 摇杆按下 |
 | 方向键 `↑↓←→` | 摇杆（X / Y） |
-| `M` | 系统菜单（application menu），不受激活目标限制（头目标时发给主手） |
+| `M` | SteamVR 仪表盘（system 按钮，与手柄 `Start` 相同），不受激活目标限制（头目标时发给主手） |
 
 > 激活目标是**头**时，手部按键无接收者（`M` 仍发给主手）。
 
@@ -79,7 +79,7 @@
 | 鼠标滚轮 | 摇杆 Y 轴短脉冲（模拟前进/后退） |
 | 左键 / 右键 / `X` / `C` / `R` / 方向键 / `M` | 全部发给**主手**（`primary_hand`，默认右手） |
 | `1` / `2` / `3` / `Tab` | 无作用（目标切换只在 vr_sim 生效） |
-| `Z` | 重置双手（此模式下控制器姿态由射线决定，基本看不到效果） |
+| `Z` | 重置朝向：从双手自身位置指向**头部正前方 1.5m**（`hand_aim_reset_distance_m`）的点，**位置不变** |
 
 > 已知简化：OpenVR 每个设备只发布一个姿态，所以 natural_mouse 下两只手会落在同一条鼠标射线上。
 
@@ -98,12 +98,12 @@
 | `RB` + 左摇杆 | **头**上下 | **激活对象**上下 |
 | `RT` / `LT` | 扳机 / 握持（激活手，模拟量） | 同左（激活对象） |
 | `A` / `B` | `A` 面板主键；轻按 `B` = 面板副键，按住 `B` > 0.3s = 移动/转动 ×3 | 同左 |
-| `Y` | 显示 / 隐藏提示图（= `V`） | 同左 |
-| `Start` | 菜单（application_menu） | 同左 |
-| 十字键 ← / → | 无 | 切换目标（头 → 左 → 右） |
+| `Y` | 切换 vr_sim ⇄ natural_mouse（= `G`） | 同左 |
+| `Back` | 显示 / 隐藏提示图（= `V`） | 同左 |
+| `Start` | SteamVR 仪表盘（system 按钮） | 同左 |
+| 十字键 ← / → | 提示图可见时翻页 | 切换目标（头 → 左 → 右） |
 | 十字键 ↑ / ↓ | 摇杆 Y | 同左 |
-| 左摇杆按下 | 切换 vr_sim ⇄ natural_mouse | 同左 |
-| 右摇杆按下 | 无 | 双手复位（= `Z`） |
+| 右摇杆按下 | 重置朝向（指向头前 1.5m，位置不变） | 双手复位（= `Z`） |
 | 震动 | 触觉反馈（`/output/haptic`）→ `XInputSetState` | 同左 |
 
 设置（`shiyan_nakedmonitor_gamepad`）：`enabled`、`slot`（-1 = 第一个连接的手柄）、
@@ -111,6 +111,8 @@
 `shiyan_nakedmonitor_controller`：`sim_stick_look_yaw` / `sim_stick_look_pitch`
 （度/秒，默认 130 / 80）、`sim_stick_pointer_speed`（natural_mouse 指针速度，
 屏幕宽/秒，默认 0.55）。
+
+> 提示图可见时：左摇杆左右（或十字键左右）翻页，此时不会移动目标、也不会切目标。
 
 > 使用前需关闭 SteamVR 的 **Steam Input**，并在 `steamvr.vrsettings` 里设置
 > `"driver_gamepad": { "enable": false }`（否则内置 gamepad 驱动也会读取手柄）。
@@ -127,7 +129,7 @@
 | 鼠标右键 | `/input/grip/value` + `/input/grip/click` |
 | 左手 `X` / `Y` | `/input/x/click` / `/input/y/click` |
 | 右手 `A` / `B` | `/input/a/click` / `/input/b/click` |
-| `M` | `/input/application_menu/click` |
+| `M` | `/input/system/click` |
 | 方向键 | `/input/joystick/x`、`/input/joystick/y` |
 | `R` | `/input/joystick/click` |
 | 震动反馈 | `/output/haptic` |
@@ -163,4 +165,5 @@
 
 - 本驱动没有 `ESC`、`Ctrl+Alt+*` 等组合热键。
 - `Z` 的重置距离/高度：`hand_reset_distance_m`（默认 0.2）、`hand_reset_height_offset_m`（默认 -0.3）。
+- natural_mouse 重置朝向的目标距离：`hand_aim_reset_distance_m`（默认 1.5m，从头部正前方取点）。
 - 手部转向灵敏度：`sim_hand_look`（默认 1.0）；头部：`sim_head_look`。

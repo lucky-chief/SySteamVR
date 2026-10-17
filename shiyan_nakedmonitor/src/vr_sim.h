@@ -51,6 +51,7 @@ struct HandInput
 	bool facePrimary = false;   // left X / right A
 	bool faceSecondary = false; // left Y / right B
 	bool menu = false;
+	bool system = false; // Start: SteamVR dashboard (system button)
 	float thumbstickX = 0.0f;
 	float thumbstickY = 0.0f;
 	bool thumbstickClick = false;
@@ -69,7 +70,8 @@ struct GamepadInput
 	float grip = 0.0f;    // RT
 	bool facePrimary = false;
 	bool buttonB = false;      // raw B: tap = face secondary, hold = 3x speed
-	bool menu = false;         // Start
+	bool menu = false;         // keyboard M
+	bool system = false;       // Start
 	bool modeToggle = false;   // L3: vr_sim <-> natural_mouse
 	bool reset = false;        // R3: reset the controllers (vr_sim)
 	bool lookModifier = false; // LB: right stick rotates the "other" thing

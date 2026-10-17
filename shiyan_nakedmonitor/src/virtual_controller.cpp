@@ -68,6 +68,9 @@ vr::EVRInitError ShiyanNakedController::Activate( uint32_t unObjectId )
 	ok &= createBoolean( left ? "/input/x/click" : "/input/a/click", components_[ Comp_FacePrimary ] );
 	ok &= createBoolean( left ? "/input/y/click" : "/input/b/click", components_[ Comp_FaceSecondary ] );
 	ok &= createBoolean( "/input/application_menu/click", components_[ Comp_AppMenuClick ] );
+	// System button: SteamVR opens/toggles the dashboard from this (the gamepad
+	// Start button is routed here, so it does something in every app).
+	ok &= createBoolean( "/input/system/click", components_[ Comp_SystemClick ] );
 	ok &= vr::VRDriverInput()->CreateScalarComponent( container, "/input/joystick/x",
 			   &components_[ Comp_JoystickX ], vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedTwoSided ) == vr::VRInputError_None;
 	ok &= vr::VRDriverInput()->CreateScalarComponent( container, "/input/joystick/y",
@@ -156,6 +159,7 @@ void ShiyanNakedController::ApplyInput()
 	vr::VRDriverInput()->UpdateBooleanComponent( components_[ Comp_FacePrimary ], input.facePrimary, 0.0 );
 	vr::VRDriverInput()->UpdateBooleanComponent( components_[ Comp_FaceSecondary ], input.faceSecondary, 0.0 );
 	vr::VRDriverInput()->UpdateBooleanComponent( components_[ Comp_AppMenuClick ], input.menu, 0.0 );
+	vr::VRDriverInput()->UpdateBooleanComponent( components_[ Comp_SystemClick ], input.system, 0.0 );
 	vr::VRDriverInput()->UpdateScalarComponent( components_[ Comp_JoystickX ], input.thumbstickX, 0.0 );
 	vr::VRDriverInput()->UpdateScalarComponent( components_[ Comp_JoystickY ], input.thumbstickY, 0.0 );
 	vr::VRDriverInput()->UpdateBooleanComponent( components_[ Comp_JoystickClick ], input.thumbstickClick, 0.0 );

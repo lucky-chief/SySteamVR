@@ -230,15 +230,20 @@ both hands plus an "active target", ported from SyOpenXRRuntime's `vr_sim`:
   * wheel moves the active hand forward/back (0.1 m per notch).
 * **natural_mouse** (`G` toggles): the mouse is a panel pointer, both hands aim
   along the eye -> cursor ray, `WASD` walks the head.
-* Buttons in both modes: LMB = select/trigger, RMB = squeeze/grip, `M` = menu,
-  `X` / `C` = face primary/secondary (left X/Y, right A/B), `R` = thumbstick
-  click, arrow keys = thumbstick, wheel = thumbstick in natural_mouse.
+* Buttons in both modes: LMB = select/trigger, RMB = squeeze/grip, `M` = SteamVR
+  dashboard (system button, same as gamepad Start), `X` / `C` = face
+  primary/secondary (left X/Y, right A/B), `R` = thumbstick click, arrow keys =
+  thumbstick, wheel = thumbstick in natural_mouse.
+* In natural_mouse, reset (`Z` / `R3`) only changes the aim: each hand points
+  from its own position at a spot `hand_aim_reset_distance_m` (1.5 m) straight
+  ahead of the head; the position is unchanged.
 * `H` shows/hides the OS pointer over the direct-mode output window.
 
 Tunables live in `shiyan_nakedmonitor_controller`: `interaction_mode`,
 `primary_hand`, `head_look_invert`, `sim_head_look`, `sim_head_move`,
 `sim_hand_look`, `sim_hand_move`, `hand_reset_distance_m` / 
 `hand_reset_height_offset_m` (Z reset distance and height relative to the head),
+`hand_aim_reset_distance_m` (natural_mouse aim-reset target distance, 1.5 m),
 `cursor_recenter`, `ray_origin_*`, ...
 
 ## Gamepads (XInput -> virtual controllers)
@@ -261,17 +266,18 @@ deliberate:
 | `RB` + left stick | Head up/down | Active target up/down |
 | `RT` / `LT` | Trigger / grip (active hand, analog) | same |
 | `A` / `B` | `A` = face primary; tap `B` = face secondary, hold `B` = 3x move/turn speed (>0.3 s) | same |
-| `Y` | Show/hide the key-hint overlay (`V`) | same |
-| `Start` | Application menu | same |
-| D-pad left/right | - | Cycle target: head -> left -> right |
+| `Y` | Toggle `vr_sim` <-> `natural_mouse` (`G`) | same |
+| `Back` | Show/hide the key-hint overlay (`V`) | same |
+| `Start` | SteamVR dashboard (system button) | same |
+| D-pad left/right | Page the help overlay | Cycle target: head -> left -> right |
 | D-pad up/down | Thumbstick Y | same |
-| `L3` (left stick click) | Toggle `vr_sim` <-> `natural_mouse` | same |
-| `R3` (right stick click) | - | Reset both hands (`Z`) |
+| `R3` (right stick click) | Reset aim toward a point 1.5 m ahead of the head | Reset both hands (`Z`) |
 | Rumble | `VREvent_Input_HapticVibration` -> `XInputSetState` | same |
 
 Keyboard target switching (`Tab` / `1` / `2` / `3`) still works. Switching the
-interaction mode (`G` or `L3`) also resets both hands to the head's orientation,
-exactly like `Z` / `R3`.
+interaction mode (`G` or `Y`) also resets both hands to the head's orientation,
+exactly like `Z` / `R3`. While the key-hint overlay is visible, the d-pad or the
+left stick pages it (no movement / target switching).
 
 Setup:
 

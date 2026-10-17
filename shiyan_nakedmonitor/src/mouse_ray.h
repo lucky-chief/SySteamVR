@@ -34,4 +34,8 @@ void Init();
 // available.
 bool ComputeAimPose( float outPosition[ 3 ], float outOrientation[ 4 ] );
 
+// Head pose in tracking space: centre-eye position (panel geometry + walk
+// offset) and head orientation. Used by the natural_mouse aim reset.
+bool GetHeadPose( float outPosition[ 3 ], float outOrientation[ 4 ] );
+
 } // namespace MouseRay

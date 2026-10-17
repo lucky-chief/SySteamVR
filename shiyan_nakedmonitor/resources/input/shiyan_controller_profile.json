@@ -31,6 +31,10 @@
 			"type": "button",
 			"order": 7
 		},
+		"/input/system": {
+			"type": "button",
+			"order": 10
+		},
 		"/input/joystick": {
 			"type": "joystick",
 			"order": 8

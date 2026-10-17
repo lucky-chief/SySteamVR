@@ -101,58 +101,6 @@ struct RayState
 
 RayState g_ray;
 
-// -Z towards dir (shortest arc, up stays level) - port of QuatFromForward.
-void QuatFromForward( const float dir[ 3 ], float outQuat[ 4 ] )
-{
-	const float len = std::sqrt( dir[ 0 ] * dir[ 0 ] + dir[ 1 ] * dir[ 1 ] + dir[ 2 ] * dir[ 2 ] );
-	if ( len < 1e-6f )
-	{
-		outQuat[ 0 ] = 0.0f;
-		outQuat[ 1 ] = 0.0f;
-		outQuat[ 2 ] = 0.0f;
-		outQuat[ 3 ] = 1.0f;
-		return;
-	}
-	const float fx = dir[ 0 ] / len;
-	const float fy = dir[ 1 ] / len;
-	const float fz = dir[ 2 ] / len;
-
-	// from = -Z; dot = -fz; axis = from x dir = (-fz*... ) computed explicitly.
-	const float dot = std::max( -1.0f, std::min( 1.0f, -fz ) );
-	float ax = 0.0f * fz - ( -1.0f ) * fy; // from.y*dir.z - from.z*dir.y = 0*fz - (-1)*fy
-	float ay = ( -1.0f ) * fx - 0.0f * fz; // from.z*dir.x - from.x*dir.z
-	float az = 0.0f * fy - 0.0f * fx;      // from.x*dir.y - from.y*dir.x
-	const float axisLen = std::sqrt( ax * ax + ay * ay + az * az );
-	if ( axisLen < 1e-6f )
-	{
-		if ( dot > 0.0f )
-		{
-			outQuat[ 0 ] = 0.0f;
-			outQuat[ 1 ] = 0.0f;
-			outQuat[ 2 ] = 0.0f;
-			outQuat[ 3 ] = 1.0f;
-		}
-		else
-		{
-			outQuat[ 0 ] = 0.0f;
-			outQuat[ 1 ] = 1.0f;
-			outQuat[ 2 ] = 0.0f;
-			outQuat[ 3 ] = 0.0f; // 180 degrees around +Y
-		}
-		return;
-	}
-	const float invAxisLen = 1.0f / axisLen;
-	ax *= invAxisLen;
-	ay *= invAxisLen;
-	az *= invAxisLen;
-	const float halfAngle = std::acos( dot ) * 0.5f;
-	const float s = std::sin( halfAngle );
-	outQuat[ 0 ] = ax * s;
-	outQuat[ 1 ] = ay * s;
-	outQuat[ 2 ] = az * s;
-	outQuat[ 3 ] = std::cos( halfAngle );
-}
-
 // Presentation window lookup. In indirect mode SteamVR's compositor creates
 // the "Headset Window"; in direct mode our own component creates a window
 // (class ShiyanNakedMonitorOutput). Without this the window-relative cursor
@@ -312,6 +260,45 @@ void Init()
 		source.c_str(), mapping.c_str(), g_ray.span_scale, g_ray.forward_offset, g_ray.up_offset );
 }
 
+bool GetHeadPose( float outPosition[ 3 ], float outOrientation[ 4 ] )
+{
+	if ( !g_ray.initialized )
+	{
+		Init();
+	}
+
+	float eyeLeft[ 3 ] = {};
+	float eyeRight[ 3 ] = {};
+	EyeTracker::GetCurrentEyes( eyeLeft, eyeRight );
+
+	float walkOffset[ 3 ] = {};
+	VrSim::GetHeadOffset( walkOffset );
+
+	float headQuat[ 4 ] = { 0.0f, 0.0f, 0.0f, 1.0f };
+	VrSim::GetHeadOrientation( headQuat );
+
+	// Centre eye in tracking space (same panel geometry as ComputeAimPose).
+	const float eyeMid[ 3 ] = {
+		( eyeLeft[ 0 ] + eyeRight[ 0 ] ) * 0.5f,
+		( eyeLeft[ 1 ] + eyeRight[ 1 ] ) * 0.5f + g_ray.screen_center_height_m,
+		( eyeLeft[ 2 ] + eyeRight[ 2 ] ) * 0.5f - g_ray.screen_distance_m };
+
+	if ( outPosition != nullptr )
+	{
+		outPosition[ 0 ] = eyeMid[ 0 ] + walkOffset[ 0 ];
+		outPosition[ 1 ] = eyeMid[ 1 ] + walkOffset[ 1 ];
+		outPosition[ 2 ] = eyeMid[ 2 ] + walkOffset[ 2 ];
+	}
+	if ( outOrientation != nullptr )
+	{
+		for ( int i = 0; i < 4; ++i )
+		{
+			outOrientation[ i ] = headQuat[ i ];
+		}
+	}
+	return true;
+}
+
 bool ComputeAimPose( float outPosition[ 3 ], float outOrientation[ 4 ] )
 {
 	if ( !g_ray.initialized )
@@ -429,7 +416,7 @@ bool ComputeAimPose( float outPosition[ 3 ], float outOrientation[ 4 ] )
 		}
 	}
 
-	QuatFromForward( dir, outOrientation );
+	Quat::FromForward( dir, outOrientation );
 	outPosition[ 0 ] = origin[ 0 ];
 	outPosition[ 1 ] = origin[ 1 ];
 	outPosition[ 2 ] = origin[ 2 ];
