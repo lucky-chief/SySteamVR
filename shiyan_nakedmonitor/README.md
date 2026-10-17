@@ -219,9 +219,10 @@ both hands plus an "active target", ported from SyOpenXRRuntime's `vr_sim`:
 
 * **vr_sim** (target based):
   * `1` / `2` / `3` activate **head / left hand / right hand**, `Tab` cycles;
-  * the mouse aims the **active hand absolutely**; with the head as the target
-    it turns the head incrementally (holding MMB does the same while a hand is
-    active);
+  * mouse movement turns the **active hand incrementally** (no angle ceiling,
+    and it keeps working at the screen edge because raw input reports movement);
+    with the head as the target the mouse turns the head the same way (holding
+    MMB does the same while a hand is active);
   * `WASD` / `QE` move the **active target** in view space, `Shift` = 3x;
   * `F` toggles mouse-translate mode (mouse moves the target sideways/up-down);
   * `Z` resets both hands to `hand_reset_distance_m` in front of the head
