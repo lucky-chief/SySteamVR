@@ -85,7 +85,37 @@
 
 ---
 
-## 4. 按键 → OpenVR 输入组件
+## 4. 手柄（XInput → 虚拟左右手）
+
+物理手柄由驱动用 XInput 轮询，映射到与键鼠相同的虚拟左右手。手柄**不提供**
+目标切换，目标仍用键盘 `Tab` / `1` / `2` / `3` 选择。
+
+| 手柄输入 | 功能 |
+|---|---|
+| 左摇杆 | 移动激活目标（= `W`/`A`/`S`/`D`，模拟量） |
+| 右摇杆 | 转动激活目标（= 移动鼠标；vr_sim 下转头/转手，natural_mouse 下转头） |
+| `LT` / `RT` | 扳机 / 握持（激活手，模拟量） |
+| `A` / `B` | 面板主键 / 副键（= `X` / `C`） |
+| `X` | 系统菜单（= `M`） |
+| `Y` | 显示 / 隐藏提示图（= `V`） |
+| `Back` | 双手重置（= `Z`） |
+| `Start` | 切换 vr_sim ⇄ natural_mouse（= `G`） |
+| `LB` | 移动速度 ×3（= `Shift`） |
+| `RB` / 右摇杆按下 | 摇杆按下（= `R`） |
+| 十字键 | 摇杆 X / Y（方向键） |
+| 手柄震动 | 应用的触觉反馈（`/output/haptic`）→ `XInputSetState` |
+
+设置（`shiyan_nakedmonitor_gamepad`）：`enabled`、`slot`（-1 = 第一个连接的手柄）、
+`deadzone`、`rumble`、`rumble_gain`；摇杆转向速度在
+`shiyan_nakedmonitor_controller`：`sim_stick_look_yaw` / `sim_stick_look_pitch`
+（度/秒，默认 130 / 80）。
+
+> 使用前需关闭 SteamVR 的 **Steam Input**，并在 `steamvr.vrsettings` 里设置
+> `"driver_gamepad": { "enable": false }`（否则内置 gamepad 驱动也会读取手柄）。
+
+---
+
+## 5. 按键 → OpenVR 输入组件
 
 用于核对应用里的绑定：
 
@@ -102,7 +132,7 @@
 
 ---
 
-## 5. 提示图相关设置
+## 6. 提示图相关设置
 
 `shiyan_nakedmonitor_help`：
 
@@ -117,16 +147,17 @@
 
 ---
 
-## 6. 建议的提示图分页
+## 7. 建议的提示图分页
 
 1. **全局**：`V` / `A D ← →`（翻页）/ `H` / `G`
 2. **vr_sim 目标与瞄准**：`1` `2` `3` `Tab`、鼠标瞄准、中键转头、`F`、`Z`
 3. **vr_sim 移动与按键**：`WASD/QE`、`Shift`、滚轮、左/右键、`X` `C` `R`、方向键、`M`
 4. **natural_mouse**：指针、中键转头、`WASD/QE`、滚轮、按键发主手、`1/2/3/Tab` 无效
+5. **手柄**：`gamepad_help.png`（左/右摇杆、扳机、A/B/X/Y、Back/Start、十字键、震动）
 
 ---
 
-## 7. 其它
+## 8. 其它
 
 - 本驱动没有 `ESC`、`Ctrl+Alt+*` 等组合热键。
 - `Z` 的重置距离/高度：`hand_reset_distance_m`（默认 0.2）、`hand_reset_height_offset_m`（默认 -0.3）。

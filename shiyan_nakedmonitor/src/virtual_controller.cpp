@@ -2,6 +2,7 @@
 #include "virtual_controller.h"
 
 #include "driverlog.h"
+#include "gamepad_input.h"
 #include "vr_sim.h"
 
 #include <cstdio>
@@ -178,6 +179,10 @@ void ShiyanNakedController::ProcessEvent( const vr::VREvent_t &event )
 	case vr::VREvent_Input_HapticVibration:
 		if ( event.data.hapticVibration.componentHandle == components_[ Comp_Haptic ] )
 		{
+			// The physical gamepad rumbles instead of the (virtual) controller.
+			GamepadInput::Rumble( event.data.hapticVibration.fAmplitude,
+				event.data.hapticVibration.fDurationSeconds );
+
 			// Rate-limited: apps can pulse every frame.
 			const auto now = std::chrono::steady_clock::now();
 			if ( last_haptic_log_.time_since_epoch().count() == 0

@@ -241,6 +241,53 @@ Tunables live in `shiyan_nakedmonitor_controller`: `interaction_mode`,
 `hand_reset_height_offset_m` (Z reset distance and height relative to the head),
 `cursor_recenter`, `ray_origin_*`, ...
 
+## Gamepads (XInput -> virtual controllers)
+
+A physical gamepad is polled with XInput inside `vrserver` and mapped onto the
+same virtual left/right controllers that the keyboard/mouse drives. This is
+deliberate:
+
+* a custom driver cannot bind the reserved `/user/gamepad` alias
+  (openvr issue #923), and
+* SteamVR's built-in `driver_gamepad` default bindings only cover a handful of
+  SteamVR Home actions (menu / teleport / turn), so most buttons do nothing in
+  Home and in games.
+
+| Gamepad | Action |
+|---|---|
+| Left stick | Move the active target (`WASD`) |
+| Right stick | Turn the active target (head or hand) |
+| `LT` / `RT` | Trigger / grip (active hand, analog) |
+| `A` / `B` | Face primary / secondary |
+| `X` | Application menu |
+| `Y` | Show/hide the key-hint overlay (`V`) |
+| `Back` | Reset both hands (`Z`) |
+| `Start` | Toggle `vr_sim` <-> `natural_mouse` (`G`) |
+| `LB` | Move 3x faster (`Shift`) |
+| `RB` | Thumbstick click (`R`) |
+| D-pad | Thumbstick |
+| Rumble | `VREvent_Input_HapticVibration` -> `XInputSetState` |
+
+Target switching stays on the keyboard (`Tab` / `1` / `2` / `3`); the pad has
+no target-switch buttons.
+
+Setup:
+
+1. **Disable Steam Input for SteamVR** (Steam -> Library -> SteamVR ->
+   Properties -> Controller -> Disable Steam Input; or set
+   `UseSteamControllerConfig` to `0` for app `250820` in
+   `userdata/<id>/config/localconfig.vdf`). Otherwise Steam grabs the pad and
+   `XInputGetState` in `vrserver` returns `ERROR_DEVICE_NOT_CONNECTED`.
+2. **Disable SteamVR's own gamepad driver** so it does not consume the pad too:
+   `"driver_gamepad": { "enable": false }` in `steamvr.vrsettings`.
+3. Keep the virtual controllers enabled:
+   `"shiyan_nakedmonitor_controller": { "enabled": true }`.
+
+Settings (`shiyan_nakedmonitor_gamepad`): `enabled`, `slot` (`-1` = first
+connected pad), `deadzone`, `rumble`, `rumble_gain`.
+`sim_stick_look_yaw` / `sim_stick_look_pitch` (degrees per second, default
+130 / 80) live in `shiyan_nakedmonitor_controller`.
+
 ## Key-hint overlay (direct mode)
 
 `V` shows/hides a set of PNG hint pages drawn over the SBS output. While the

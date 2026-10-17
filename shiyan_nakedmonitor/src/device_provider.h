@@ -30,4 +30,5 @@ private:
 	bool prev_v_down_ = false; // V hotkey edge detection (help overlay)
 	bool prev_help_left_ = false;  // A / Left paging edge
 	bool prev_help_right_ = false; // D / Right paging edge
+	bool prev_pad_y_ = false;      // gamepad Y (help overlay) edge
 };

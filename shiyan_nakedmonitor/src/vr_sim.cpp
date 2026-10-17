@@ -89,6 +89,10 @@ struct SimState
 	float hand_look_gain = 1.0f;
 	float hand_move_gain = 1.0f;
 
+	// Right stick look rates (radians/second).
+	float stick_yaw_rate = 2.27f;   // 130 deg/s
+	float stick_pitch_rate = 1.40f; // 80 deg/s
+
 	int primary_hand = 1; // natural_mouse: buttons go here (0 = left, 1 = right)
 
 	float wheel_stick_seconds = 0.0f;
@@ -108,6 +112,8 @@ struct SimState
 	bool last_tab = false;
 	bool last_f = false;
 	bool last_z = false;
+	bool last_pad_mode = false;
+	bool last_pad_reset = false;
 	bool target_logged = false;
 
 	// SetCursorPos after an edge recenter synthesizes mouse movement that raw
@@ -118,7 +124,21 @@ struct SimState
 };
 
 SimState g_sim;
+VrSim::GamepadInput g_gamepad;
 float g_head_base_height = 1.5f;
+
+float WrapPi( float angle )
+{
+	while ( angle > 3.14159265f )
+	{
+		angle -= 2.0f * 3.14159265f;
+	}
+	while ( angle < -3.14159265f )
+	{
+		angle += 2.0f * 3.14159265f;
+	}
+	return angle;
+}
 
 void RecenterCursorIfNearEdge()
 {
@@ -150,8 +170,9 @@ void RecenterCursorIfNearEdge()
 }
 
 // Move `position` horizontally in the head's yaw plane (view space).
-void MoveInViewSpace( float position[ 3 ], float headYaw, float step,
-	bool forward, bool back, bool right, bool left )
+// forward/right are -1 .. 1 so the analog stick and the digital keys share
+// the same code path.
+void MoveInViewSpace( float position[ 3 ], float headYaw, float step, float forward, float right )
 {
 	const float sinYaw = std::sin( headYaw );
 	const float cosYaw = std::cos( headYaw );
@@ -160,26 +181,8 @@ void MoveInViewSpace( float position[ 3 ], float headYaw, float step,
 	const float rightX = cosYaw;
 	const float rightZ = -sinYaw;
 
-	if ( forward )
-	{
-		position[ 0 ] += forwardX * step;
-		position[ 2 ] += forwardZ * step;
-	}
-	if ( back )
-	{
-		position[ 0 ] -= forwardX * step;
-		position[ 2 ] -= forwardZ * step;
-	}
-	if ( right )
-	{
-		position[ 0 ] += rightX * step;
-		position[ 2 ] += rightZ * step;
-	}
-	if ( left )
-	{
-		position[ 0 ] -= rightX * step;
-		position[ 2 ] -= rightZ * step;
-	}
+	position[ 0 ] += ( forwardX * forward + rightX * right ) * step;
+	position[ 2 ] += ( forwardZ * forward + rightZ * right ) * step;
 }
 
 } // namespace
@@ -222,6 +225,14 @@ void Init()
 	g_sim.hand_look_gain = GetFloatSetting( "sim_hand_look", g_sim.hand_look_gain );
 	g_sim.hand_move_gain = GetFloatSetting( "sim_hand_move", g_sim.hand_move_gain );
 
+	// Stick look speed in degrees/second (clamped to 10 .. 360).
+	float stickYawDeg = GetFloatSetting( "sim_stick_look_yaw", 130.0f );
+	float stickPitchDeg = GetFloatSetting( "sim_stick_look_pitch", 80.0f );
+	stickYawDeg = std::max( 10.0f, std::min( 360.0f, stickYawDeg ) );
+	stickPitchDeg = std::max( 10.0f, std::min( 360.0f, stickPitchDeg ) );
+	g_sim.stick_yaw_rate = stickYawDeg * 0.0174532925f;
+	g_sim.stick_pitch_rate = stickPitchDeg * 0.0174532925f;
+
 	// Z reset distance: keep it in a sane range (0.1 .. 3 m).
 	g_sim.hand_reset_distance = GetFloatSetting( "hand_reset_distance_m", g_sim.hand_reset_distance );
 	g_sim.hand_reset_distance = std::max( 0.1f, std::min( 3.0f, g_sim.hand_reset_distance ) );
@@ -246,6 +257,11 @@ void SetHeadBaseHeight( float meters )
 	g_head_base_height = meters;
 }
 
+void SetGamepad( const GamepadInput &input )
+{
+	g_gamepad = input;
+}
+
 void Update( RawInput::State &input )
 {
 	if ( !g_sim.initialized )
@@ -268,9 +284,10 @@ void Update( RawInput::State &input )
 	}
 	g_sim.last_time = now;
 
-	// --- G: toggle interaction mode ---------------------------------------
+	// --- G / Start: toggle interaction mode --------------------------------
 	const bool g_down = input.keys[ 'G' ];
-	if ( g_down && !g_sim.last_g )
+	const bool pad_mode = g_gamepad.connected && g_gamepad.toggleMode;
+	if ( ( g_down && !g_sim.last_g ) || ( pad_mode && !g_sim.last_pad_mode ) )
 	{
 		g_sim.natural_mouse = !g_sim.natural_mouse;
 		DriverLog( "shiyan_nakedmonitor: interaction mode -> %s",
@@ -278,6 +295,7 @@ void Update( RawInput::State &input )
 								 : "vr_sim (mouse aims the active target)" );
 	}
 	g_sim.last_g = g_down;
+	g_sim.last_pad_mode = pad_mode;
 
 	// --- 1/2/3 + Tab: active target (vr_sim only) --------------------------
 	const bool one = input.keys[ '1' ];
@@ -350,24 +368,30 @@ void Update( RawInput::State &input )
 		mouse_move_up = -static_cast< float >( input.dy ) * metersPerPixel;
 	}
 
-	// --- keys --------------------------------------------------------------
-	const bool movingForward = input.keys[ 'W' ];
-	const bool movingBack = input.keys[ 'S' ];
-	const bool movingRight = input.keys[ 'D' ];
-	const bool movingLeft = input.keys[ 'A' ];
+	// --- keys / sticks -----------------------------------------------------
+	const float keyForward = ( input.keys[ 'W' ] ? 1.0f : 0.0f ) - ( input.keys[ 'S' ] ? 1.0f : 0.0f );
+	const float keyStrafe = ( input.keys[ 'D' ] ? 1.0f : 0.0f ) - ( input.keys[ 'A' ] ? 1.0f : 0.0f );
+	const float moveForward = std::max( -1.0f, std::min( 1.0f, keyForward + g_gamepad.moveY ) );
+	const float moveStrafe = std::max( -1.0f, std::min( 1.0f, keyStrafe + g_gamepad.moveX ) );
 	const bool movingDown = input.keys[ 'Q' ];
 	const bool movingUp = input.keys[ 'E' ];
-	const float speedScale = input.keys[ VK_SHIFT ] ? 3.0f : 1.0f;
+	const float speedScale = ( input.keys[ VK_SHIFT ] || ( g_gamepad.connected && g_gamepad.sprint ) ) ? 3.0f : 1.0f;
 
 	const bool select = input.left;
 	const bool squeeze = input.right;
-	const bool menu = input.keys[ 'M' ];
+	const bool menu = input.keys[ 'M' ] || ( g_gamepad.connected && g_gamepad.menu );
 	const bool headLookModifier = input.middle;
 
-	const bool stickClick = input.keys[ 'R' ]
-		&& !( input.keys[ VK_CONTROL ] && input.keys[ VK_MENU ] );
-	const bool facePrimary = input.keys[ 'X' ];
-	const bool faceSecondary = input.keys[ 'C' ];
+	const bool stickClick = ( input.keys[ 'R' ]
+								&& !( input.keys[ VK_CONTROL ] && input.keys[ VK_MENU ] ) )
+		|| ( g_gamepad.connected && g_gamepad.thumbstickClick );
+	const bool facePrimary = input.keys[ 'X' ] || ( g_gamepad.connected && g_gamepad.facePrimary );
+	const bool faceSecondary = input.keys[ 'C' ] || ( g_gamepad.connected && g_gamepad.faceSecondary );
+
+	const float triggerValue = std::max( select ? 1.0f : 0.0f,
+		g_gamepad.connected ? g_gamepad.trigger : 0.0f );
+	const float gripValue = std::max( squeeze ? 1.0f : 0.0f,
+		g_gamepad.connected ? g_gamepad.grip : 0.0f );
 
 	const bool headIsTarget = ( g_sim.target == Target::Head );
 
@@ -419,9 +443,30 @@ void Update( RawInput::State &input )
 		}
 	}
 
-	// --- Z: reset both hands in front of the head -------------------------
+	// --- right stick: turn the active target (same rules as the mouse) -----
+	if ( g_gamepad.connected && !g_sim.mouse_translate )
+	{
+		if ( g_sim.natural_mouse || headIsTarget )
+		{
+			g_sim.head_yaw = WrapPi( g_sim.head_yaw
+				- g_gamepad.lookX * g_sim.stick_yaw_rate * g_sim.head_look_gain * dt );
+			g_sim.head_pitch += g_gamepad.lookY * g_sim.stick_pitch_rate * g_sim.head_look_gain * dt;
+			g_sim.head_pitch = std::max( -kHeadMaxPitch, std::min( kHeadMaxPitch, g_sim.head_pitch ) );
+		}
+		else
+		{
+			const int hand = ( g_sim.target == Target::LeftHand ) ? 0 : 1;
+			g_sim.hand_yaw[ hand ] = WrapPi( g_sim.hand_yaw[ hand ]
+				- g_gamepad.lookX * g_sim.stick_yaw_rate * g_sim.hand_look_gain * dt );
+			g_sim.hand_pitch[ hand ] += g_gamepad.lookY * g_sim.stick_pitch_rate * g_sim.hand_look_gain * dt;
+			g_sim.hand_pitch[ hand ] = std::max( -kHeadMaxPitch, std::min( kHeadMaxPitch, g_sim.hand_pitch[ hand ] ) );
+		}
+	}
+
+	// --- Z / Back: reset both hands in front of the head ------------------
 	const bool z_down = input.keys[ 'Z' ];
-	if ( z_down && !g_sim.last_z )
+	const bool pad_reset = g_gamepad.connected && g_gamepad.reset;
+	if ( ( z_down && !g_sim.last_z ) || ( pad_reset && !g_sim.last_pad_reset ) )
 	{
 		float headQuat[ 4 ] = {};
 		Quat::FromYawPitch( g_sim.head_yaw, g_sim.head_pitch, headQuat );
@@ -449,6 +494,7 @@ void Update( RawInput::State &input )
 			resetDistance, resetHeight );
 	}
 	g_sim.last_z = z_down;
+	g_sim.last_pad_reset = pad_reset;
 
 	// --- movement of the active target ------------------------------------
 	auto applyMouseTranslate = [&]( float position[ 3 ] ) {
@@ -467,8 +513,7 @@ void Update( RawInput::State &input )
 	if ( g_sim.natural_mouse || headIsTarget )
 	{
 		const float step = kHeadMoveSpeed * g_sim.head_move_gain * speedScale * dt;
-		MoveInViewSpace( g_sim.head_offset, g_sim.head_yaw, step, movingForward, movingBack,
-			movingRight, movingLeft );
+		MoveInViewSpace( g_sim.head_offset, g_sim.head_yaw, step, moveForward, moveStrafe );
 		if ( movingDown )
 		{
 			g_sim.head_offset[ 1 ] -= step;
@@ -483,8 +528,7 @@ void Update( RawInput::State &input )
 	{
 		const int hand = ( g_sim.target == Target::LeftHand ) ? 0 : 1;
 		const float step = kHandMoveSpeed * g_sim.hand_move_gain * speedScale * dt;
-		MoveInViewSpace( g_sim.hand_pos[ hand ], g_sim.head_yaw, step, movingForward, movingBack,
-			movingRight, movingLeft );
+		MoveInViewSpace( g_sim.hand_pos[ hand ], g_sim.head_yaw, step, moveForward, moveStrafe );
 		if ( movingDown )
 		{
 			g_sim.hand_pos[ hand ][ 1 ] -= step;
@@ -501,13 +545,18 @@ void Update( RawInput::State &input )
 			const float sign = g_sim.wheel_invert ? -1.0f : 1.0f;
 			const float distance = static_cast< float >( input.wheel ) * kWheelMoveStep * g_sim.hand_move_gain * sign;
 			MoveInViewSpace( g_sim.hand_pos[ hand ], g_sim.head_yaw, std::fabs( distance ),
-				distance > 0.0f, distance < 0.0f, false, false );
+				distance > 0.0f ? 1.0f : -1.0f, 0.0f );
 		}
 	}
 
-	// --- thumbstick (arrows) + natural_mouse wheel pulse -------------------
+	// --- thumbstick (arrows / d-pad) + natural_mouse wheel pulse ------------
 	float thumbstickX = ( input.keys[ VK_RIGHT ] ? 1.0f : 0.0f ) - ( input.keys[ VK_LEFT ] ? 1.0f : 0.0f );
 	float thumbstickY = ( input.keys[ VK_UP ] ? 1.0f : 0.0f ) - ( input.keys[ VK_DOWN ] ? 1.0f : 0.0f );
+	if ( g_gamepad.connected )
+	{
+		thumbstickX = std::max( -1.0f, std::min( 1.0f, thumbstickX + g_gamepad.thumbX ) );
+		thumbstickY = std::max( -1.0f, std::min( 1.0f, thumbstickY + g_gamepad.thumbY ) );
+	}
 	if ( g_sim.natural_mouse )
 	{
 		if ( input.wheel != 0 )
@@ -538,10 +587,10 @@ void Update( RawInput::State &input )
 		HandInput &out = g_sim.hand_input[ hand ];
 		out = HandInput{};
 		const bool isActive = ( hand == buttonHand );
-		out.trigger = isActive && select ? 1.0f : 0.0f;
-		out.triggerClick = isActive && select;
-		out.grip = isActive && squeeze ? 1.0f : 0.0f;
-		out.gripClick = isActive && squeeze;
+		out.trigger = isActive ? triggerValue : 0.0f;
+		out.triggerClick = isActive && triggerValue > 0.5f;
+		out.grip = isActive ? gripValue : 0.0f;
+		out.gripClick = isActive && gripValue > 0.5f;
 		out.facePrimary = isActive && facePrimary;
 		out.faceSecondary = isActive && faceSecondary;
 		out.menu = ( hand == menuHand ) && menu;

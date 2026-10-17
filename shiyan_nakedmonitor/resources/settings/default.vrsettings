@@ -30,7 +30,16 @@
 		"ray_origin_up_m": -0.205,
 		"ray_span_scale": 2.5,
 		"ray_debug_log": false,
-		"wheel_invert": false
+		"wheel_invert": false,
+		"sim_stick_look_yaw": 130.0,
+		"sim_stick_look_pitch": 80.0
+	},
+	"shiyan_nakedmonitor_gamepad": {
+		"enabled": true,
+		"slot": -1,
+		"deadzone": 0.18,
+		"rumble": true,
+		"rumble_gain": 1.0
 	},
 	"shiyan_nakedmonitor_help": {
 		"enabled": true,

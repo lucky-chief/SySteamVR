@@ -3,6 +3,7 @@
 
 #include "driverlog.h"
 #include "eye_tracker.h"
+#include "gamepad_input.h"
 #include "ime_switch.h"
 #include "raw_input.h"
 #include "vr_sim.h"
@@ -44,6 +45,9 @@ vr::EVRInitError NakedDeviceProvider::Init( vr::IVRDriverContext *pDriverContext
 	VrSim::SetHeadBaseHeight( hmd_device_->GetSeatedHeightMeters() );
 	VrSim::Init();
 
+	// Physical gamepad (XInput), mapped onto the virtual controllers in RunFrame.
+	GamepadInput::Init();
+
 	// --- Virtual keyboard/mouse controllers (left + right hand) -----------
 	if ( GetBoolSetting( "shiyan_nakedmonitor_controller", "enabled", true ) )
 	{
@@ -79,6 +83,10 @@ vr::EVRInitError NakedDeviceProvider::Init( vr::IVRDriverContext *pDriverContext
 		}
 	}
 
+	// --- Virtual gamepad ----------------------------------------------------
+	// Not implemented by this driver: SteamVR's built-in "gamepad" driver is the
+	// supported path (enable driver_gamepad and disable Steam Input for SteamVR).
+
 	return vr::VRInitError_None;
 }
 
@@ -101,6 +109,38 @@ void NakedDeviceProvider::RunFrame()
 	// Keyboard/mouse snapshot. VrSim routes it to the simulated head/hands and
 	// zeroes the mouse deltas it consumed.
 	RawInput::State input = RawInput::Consume();
+
+	// --- Physical gamepad (XInput) -> virtual controllers ------------------
+	// See gamepad_input.h: the pad drives the same simulated head/hands as the
+	// keyboard/mouse, because a custom driver cannot use "/user/gamepad" and the
+	// built-in gamepad bindings only cover a few SteamVR Home actions.
+	const GamepadInput::State pad = GamepadInput::Poll();
+
+	// Y = the keyboard's V (help overlay).
+	if ( pad.y && !prev_pad_y_ && hmd_device_ != nullptr )
+	{
+		hmd_device_->ToggleHelpOverlay();
+	}
+	prev_pad_y_ = pad.y;
+
+	VrSim::GamepadInput sim_pad;
+	sim_pad.connected = pad.connected;
+	sim_pad.moveX = pad.leftX;
+	sim_pad.moveY = pad.leftY;
+	sim_pad.lookX = pad.rightX;
+	sim_pad.lookY = pad.rightY;
+	sim_pad.trigger = pad.leftTrigger;   // LT
+	sim_pad.grip = pad.rightTrigger;     // RT
+	sim_pad.facePrimary = pad.a;
+	sim_pad.faceSecondary = pad.b;
+	sim_pad.menu = pad.x;
+	sim_pad.reset = pad.back;
+	sim_pad.toggleMode = pad.start;
+	sim_pad.sprint = pad.shoulderLeft;
+	sim_pad.thumbstickClick = pad.shoulderRight || pad.rightStickClick;
+	sim_pad.thumbX = ( pad.dpadRight ? 1.0f : 0.0f ) - ( pad.dpadLeft ? 1.0f : 0.0f );
+	sim_pad.thumbY = ( pad.dpadUp ? 1.0f : 0.0f ) - ( pad.dpadDown ? 1.0f : 0.0f );
+	VrSim::SetGamepad( sim_pad );
 
 	// Key-hint overlay: V shows/hides it; while visible, A/D or Left/Right page
 	// through the images and are withheld from the simulator (no movement).

@@ -56,6 +56,31 @@ struct HandInput
 	bool thumbstickClick = false;
 };
 
+// Physical gamepad, merged with the keyboard/mouse state every frame.
+// Sticks are -1 .. 1 (x right, y up/forward positive), triggers 0 .. 1.
+struct GamepadInput
+{
+	bool connected = false;
+	float moveX = 0.0f; // left stick
+	float moveY = 0.0f;
+	float lookX = 0.0f; // right stick
+	float lookY = 0.0f;
+	float trigger = 0.0f; // LT
+	float grip = 0.0f;    // RT
+	bool facePrimary = false;
+	bool faceSecondary = false;
+	bool menu = false;
+	bool reset = false;     // Back: same as Z
+	bool toggleMode = false; // Start: same as G
+	bool sprint = false;     // LB: same as Shift
+	bool thumbstickClick = false;
+	float thumbX = 0.0f; // d-pad
+	float thumbY = 0.0f;
+};
+
+// Installed by the provider once per frame before Update().
+void SetGamepad( const GamepadInput &input );
+
 void Init();
 
 // Seated base height (metres): the y that the head sits at with a zero walk
