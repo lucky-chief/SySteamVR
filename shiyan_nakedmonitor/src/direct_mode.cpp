@@ -5,6 +5,7 @@
 
 #include <cfloat>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <thread>
@@ -972,12 +973,22 @@ void NakedDirectModeComponent::SubmitLayer( const SubmitLayerPerEye_t ( &perEye 
 		eye_srv_[ eye ] = FindSrv( perEye[ eye ].hTexture );
 
 		const vr::VRTextureBounds_t &bounds = perEye[ eye ].bounds;
+
+		// Bounds = valid region + orientation of the provided texture:
+		//   * a sub-rect (e.g. SteamVR's compositor renders into 0..0.871 of
+		//     the texture) must be honoured, otherwise the image sits in the
+		//     top-left corner with black around it;
+		//   * a reversed range (uMax < uMin / vMax < vMin) flips the image -
+		//     bottom-up apps such as Google Earth VR submit their own SBS
+		//     texture that way (L = 0..0.5, R = 0.5..1, v reversed), and it
+		//     also tells which half belongs to which eye.
 		float u0 = bounds.uMin;
 		float v0 = bounds.vMin;
 		float u1 = bounds.uMax;
 		float v1 = bounds.vMax;
-		if ( !( u1 > u0 ) || !( v1 > v0 ) )
+		if ( std::fabs( u1 - u0 ) < 1e-6f || std::fabs( v1 - v0 ) < 1e-6f )
 		{
+			// Degenerate / unset bounds: whole texture, no flip.
 			u0 = 0.0f;
 			v0 = 0.0f;
 			u1 = 1.0f;
@@ -987,6 +998,29 @@ void NakedDirectModeComponent::SubmitLayer( const SubmitLayerPerEye_t ( &perEye 
 		eye_uv_rect_[ eye ][ 1 ] = v0;
 		eye_uv_rect_[ eye ][ 2 ] = u1 - u0;
 		eye_uv_rect_[ eye ][ 3 ] = v1 - v0;
+	}
+
+	// Rate-limited diagnostic: report non-trivial bounds (flips / sub-rects) so
+	// per-app layout issues can be recognised from the log.
+	{
+		static std::chrono::steady_clock::time_point last_bounds_log{};
+		const auto now = std::chrono::steady_clock::now();
+		const bool unusual = eye_uv_rect_[ 0 ][ 2 ] < 0.0f || eye_uv_rect_[ 0 ][ 3 ] < 0.0f
+			|| eye_uv_rect_[ 1 ][ 2 ] < 0.0f || eye_uv_rect_[ 1 ][ 3 ] < 0.0f
+			|| std::fabs( eye_uv_rect_[ 0 ][ 2 ] ) < 0.999f
+			|| std::fabs( eye_uv_rect_[ 0 ][ 3 ] ) < 0.999f
+			|| eye_uv_rect_[ 0 ][ 0 ] != 0.0f || eye_uv_rect_[ 0 ][ 1 ] != 0.0f;
+		if ( unusual && ( last_bounds_log.time_since_epoch().count() == 0
+						  || now - last_bounds_log >= std::chrono::seconds( 2 ) ) )
+		{
+			last_bounds_log = now;
+			DriverLog( "shiyan_nakedmonitor: [direct] layer bounds L=(%.3f,%.3f)-(%.3f,%.3f) "
+					   "R=(%.3f,%.3f)-(%.3f,%.3f)",
+				perEye[ 0 ].bounds.uMin, perEye[ 0 ].bounds.vMin,
+				perEye[ 0 ].bounds.uMax, perEye[ 0 ].bounds.vMax,
+				perEye[ 1 ].bounds.uMin, perEye[ 1 ].bounds.vMin,
+				perEye[ 1 ].bounds.uMax, perEye[ 1 ].bounds.vMax );
+		}
 	}
 
 	have_eye_textures_ = ( eye_srv_[ 0 ] != nullptr && eye_srv_[ 1 ] != nullptr );
