@@ -3,6 +3,7 @@
 
 #include "driverlog.h"
 #include "eye_tracker.h"
+#include "focus_gate.h"
 #include "gamepad_input.h"
 #include "ime_switch.h"
 #include "raw_input.h"
@@ -114,7 +115,20 @@ void NakedDeviceProvider::RunFrame()
 	// See gamepad_input.h: the pad drives the same simulated head/hands as the
 	// keyboard/mouse, because a custom driver cannot use "/user/gamepad" and the
 	// built-in gamepad bindings only cover a few SteamVR Home actions.
-	const GamepadInput::State pad = GamepadInput::Poll();
+	GamepadInput::State pad = GamepadInput::Poll();
+
+	// --- Focus gate --------------------------------------------------------
+	// The raw input capture is global (RIDEV_INPUTSINK), so without this the
+	// user's normal desktop typing would drive the virtual head/hands. Only
+	// feed the simulator while the VR view / a SteamVR window / a fullscreen
+	// app owns the foreground (see focus_gate.h). Deltas are still consumed
+	// above, so refocusing never produces a jump, and held keys are dropped
+	// as released (a zeroed state) while unfocused.
+	if ( !FocusGate::IsInputActive() )
+	{
+		input = RawInput::State{};
+		pad = GamepadInput::State{};
+	}
 
 	// Back = keyboard V (help overlay); Y = keyboard G (interaction mode).
 	if ( pad.back && !prev_pad_back_ && hmd_device_ != nullptr )

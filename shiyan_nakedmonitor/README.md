@@ -314,6 +314,33 @@ Settings live in `shiyan_nakedmonitor_help`:
 Each page is centered in both eye halves and aspect-fit (never stretched); PNG
 alpha is blended over the SBS image. Only available with `display_mode = direct`.
 
+## Input focus gate
+
+The keyboard/mouse capture uses `RIDEV_INPUTSINK`, i.e. it keeps receiving
+events while another window has focus - required because the VR view is not
+the active window most of the time. That also means desktop typing would drive
+the simulated head/hands, so input is gated on window focus:
+
+* active when the driver's own output window (`ShiyanNakedMonitorOutput`) owns
+  the foreground, when a SteamVR process owns it, or when a **borderless
+  fullscreen** window is in front (VR apps usually mirror fullscreen);
+* blocked otherwise (editor/browser/desktop). Mouse deltas keep being consumed
+  while blocked, so refocusing the VR view never jumps, and held keys are
+  dropped as released.
+
+Settings live in `shiyan_nakedmonitor_focus`:
+
+| Key | Meaning |
+|---|---|
+| `enabled` | Master switch (default `true`) |
+| `processes` | Comma-separated process names allowed to drive input (default: the SteamVR family) |
+| `allow_output_window` | Accept the direct-mode output window (default `true`) |
+| `allow_fullscreen` | Accept borderless fullscreen windows (default `true`) |
+
+The log shows state changes (`input focus active (VR output window)` /
+`input focus blocked (code)`), which makes it easy to check why input is or is
+not reaching the simulator.
+
 ## Not yet implemented
 
 * Real six-DoF tracking (the pose is simulated from keyboard/mouse).

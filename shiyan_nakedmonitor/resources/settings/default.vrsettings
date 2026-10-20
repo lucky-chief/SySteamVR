@@ -53,6 +53,12 @@
 		"processes": "vrcompositor,vrmonitor,vrdashboard,vrwebhelper,vrserver,steamwebhelper,steamtours",
 		"keyboard_layout": "00000409"
 	},
+	"shiyan_nakedmonitor_focus": {
+		"enabled": true,
+		"processes": "vrserver,vrcompositor,vrmonitor,vrdashboard,vrwebhelper,steamwebhelper,steamtours,steam",
+		"allow_output_window": true,
+		"allow_fullscreen": true
+	},
 	"shiyan_nakedmonitor_display": {
 		"auto_place_window": true,
 		"monitor_name_substring": "SYS_A_1E320H",
